@@ -1,0 +1,10 @@
+fastapi
+sqlalchemy
+python-jose
+pydantic
+uvicorn
+passlib
+starlette
+geopy
+requests
+psycopg2

@@ -7,4 +7,4 @@ passlib
 starlette
 geopy
 requests
-psycopg2
+psycopg2-binary

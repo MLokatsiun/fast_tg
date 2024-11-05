@@ -1,0 +1,46 @@
+stages:
+  - stop_docker
+  - build
+  - start_docker
+
+job_stop_docker:
+  stage: stop_docker
+  script:
+    - echo "Stopping Docker containers"
+    - cd $FAST_TG_BOT_DOCKERFILE
+    - docker compose stop
+  only:
+    - main
+  tags:
+    - fast-tg-bot
+
+job_build:
+  stage: build
+  script:
+    - echo "Building the project"
+    - rsync -av --delete --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
+    - rsync -av --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
+    - echo "Install requirements
+    - cd $FAST_TG_BOT_SRC
+    - source venv/bin/activate
+    - pip install -r requirements.txt
+
+  only:
+    - main
+  tags:
+    - fast-tg-bot
+  dependencies:
+    - job_stop_docker
+
+job_start_docker:
+  stage: start_docker
+  script:
+    - echo "Starting Docker containers"
+    - cd $FAST_TG_BOT_DOCKERFILE
+    - docker compose up --build -d
+  only:
+    - main
+  tags:
+    - fast-tg-bot
+  dependencies:
+    - job_build

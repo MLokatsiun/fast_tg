@@ -20,7 +20,7 @@ job_build:
     - echo "Building the project"
     - rsync -av --delete --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
     - rsync -av --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
-    - echo "Install requirements
+    - echo "Install requirements"
     - cd $FAST_TG_BOT_SRC
     - source venv/bin/activate
     - pip install -r requirements.txt

@@ -46,7 +46,7 @@ class Locations(Base):
             Raises:
                 ValueError: If the address cannot be found.
         """
-        geolocator = Nominatim(user_agent="geoapiExercises")
+        geolocator = Nominatim(user_agent="api/1.0 (misaloka29@gmail.com)")
         location = geolocator.geocode(address)
 
         if location:
@@ -61,17 +61,19 @@ class Customer(Base):
     __tablename__ = 'Customer'
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    phone_num = Column(BigInteger, unique=True)
-    tg_id = Column(BigInteger)
+    phone_num = Column(String, unique=True)
+    tg_id = Column(String)
     firstname = Column(String)
     lastname = Column(String)
     patronymic = Column(String)
+    role_id = Column(Integer, ForeignKey("Roles.id"))
     location_id = Column(Integer, ForeignKey('Locations.id'))
+    client_id = Column(Integer, ForeignKey('Clients.id'))
 
     location = relationship("Locations", primaryjoin="Customer.location_id == Locations.id")
     applications = relationship('Applications', back_populates='customer')
-    roles = relationship('Roles', secondary='Ink_CustomerRole')
-    categories = relationship('Categories', secondary='Ink_CustomerCategories')
+    roles = relationship('Roles', secondary='Ink_CustomerRole', back_populates='customers')
+    client = relationship('Client', back_populates='customers')
 
 
 class Categories(Base):
@@ -114,8 +116,7 @@ class Roles(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
 
-    customers = relationship('Customer', secondary='Ink_CustomerRole')
-    user_verifications = relationship('UserVerification', back_populates='role')
+    customers = relationship('Customer', secondary='Ink_CustomerRole', back_populates='roles')
 
 
 class Ink_CustomerRole(Base):
@@ -158,22 +159,31 @@ class Ink_CustomerCategories(Base):
     category = relationship('Categories')
 
 
-class UserVerification(Base):
-    __tablename__ = 'UserVerification'
+# class UserVerification(Base):
+#     __tablename__ = 'UserVerification'
+#
+#     id = Column(Integer, primary_key=True, index=True)
+#     phone_num = Column(BigInteger, unique=True, nullable=False)
+#     password_hash = Column(String, nullable=False)
+#     role_id = Column(Integer, ForeignKey('Roles.id'), nullable=False)
+#     extra_info = Column(String, nullable=True)
+#
+#     role = relationship('Roles', back_populates='user_verifications')
+#
+#
+# class User(Base):
+#     __tablename__ = "users"
+#
+#     id = Column(Integer, primary_key=True, index=True)
+#     phone_num = Column(Integer, unique=True, index=True)
+#     role = Column(String, index=True)
+#     password = Column(String)
 
-    id = Column(Integer, primary_key=True, index=True)
-    phone_num = Column(BigInteger, unique=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    role_id = Column(Integer, ForeignKey('Roles.id'), nullable=False)
-    extra_info = Column(String, nullable=True)
+class Client(Base):
+    __tablename__ = 'Clients'
 
-    role = relationship('Roles', back_populates='user_verifications')
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False)
 
+    customers = relationship('Customer', back_populates='client')
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    phone_num = Column(Integer, unique=True, index=True)
-    role = Column(String, index=True)
-    password = Column(String)

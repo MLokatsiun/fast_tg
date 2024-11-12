@@ -4,7 +4,7 @@ import os
 import base64
 from fastapi.responses import JSONResponse
 from database import get_db
-from business_logical import (get_current_volonter, get_coordinates, )
+from business_logical import (get_current_volonter, get_coordinates)
 import models
 from schemas import CreateCustomerBase, EditCustomerBase, CloseApplicationBase, AcceptApplicationBase
 from typing import Optional
@@ -12,82 +12,12 @@ from typing import Optional
 router = APIRouter()
 
 
-@router.post("/volunteer/", status_code=200)
-async def create_volunteer(
-        volunteer_info: CreateCustomerBase,
-        db: Session = Depends(get_db)
+@router.put('/profile/')
+async def edit_customer(
+        customer_info: EditCustomerBase,
+        db: Session = Depends(get_db),
+        volunteer: models.Customer = Depends(get_current_volonter)
 ):
-    """
-        Create a new volunteer in the database.
-
-        Args:
-            volunteer_info (CreateCustomerBase): The volunteer information including
-                                                  phone number, Telegram ID, and address.
-            db (Session): The database session dependency.
-
-        Raises:
-            HTTPException: If the volunteer already exists or if the address/coordinates
-                           are not provided.
-
-        Returns:
-            dict: A dictionary containing the created volunteer's information.
-    """
-    try:
-        existing_volunteer = db.query(models.Customer).filter(
-            models.Customer.phone_num == volunteer_info.phone_num
-        ).first()
-
-        if existing_volunteer:
-            raise HTTPException(status_code=400, detail="Volunteer with this phone number already exists.")
-
-        if volunteer_info.address:
-            coordinates = get_coordinates(volunteer_info.address)
-            latitude, longitude = coordinates["latitude"], coordinates["longitude"]
-        elif volunteer_info.latitude is not None and volunteer_info.longitude is not None:
-            latitude, longitude = volunteer_info.latitude, volunteer_info.longitude
-        else:
-            raise HTTPException(status_code=400, detail="Provide either address or both latitude and longitude.")
-
-        create_location = models.Locations(
-            latitude=latitude,
-            longitude=longitude,
-            address_name=volunteer_info.address
-        )
-
-        create_volunteer = models.Customer(
-            phone_num=volunteer_info.phone_num,
-            tg_id=volunteer_info.tg_id,
-            firstname=volunteer_info.firstname,
-            lastname=volunteer_info.lastname,
-            patronymic=volunteer_info.patronymic,
-            location_id=create_location.id
-        )
-
-        db.add(create_location)
-        db.commit()
-        db.refresh(create_location)
-
-        create_volunteer.location_id = create_location.id
-        db.add(create_volunteer)
-        db.commit()
-        db.refresh(create_volunteer)
-
-        return {
-            'id': create_volunteer.id,
-            'phone_num': create_volunteer.phone_num,
-            'tg_id': create_volunteer.tg_id,
-            'firstname': create_volunteer.firstname,
-            'lastname': create_volunteer.lastname,
-            'patronymic': create_volunteer.patronymic,
-            'location': create_location.id
-        }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f'Error {e}')
-
-
-@router.put('/volunteer/profile/')
-async def edit_customer(customer_info: EditCustomerBase, db: Session = Depends(get_db),
-                        volunteer: models.Customer = Depends(get_current_volonter)):
     """
         Edit an existing volunteer's profile.
 
@@ -107,8 +37,8 @@ async def edit_customer(customer_info: EditCustomerBase, db: Session = Depends(g
 
         if customer_info.location is not None:
             if customer_info.location.latitude is None or customer_info.location.longitude is None:
-                if customer_info.location.address_name:
-                    coordinates = get_coordinates(customer_info.location.address_name)
+                if customer_info.location.address:
+                    coordinates = get_coordinates(customer_info.location.address)
                     latitude = coordinates["latitude"]
                     longitude = coordinates["longitude"]
                 else:
@@ -122,12 +52,12 @@ async def edit_customer(customer_info: EditCustomerBase, db: Session = Depends(g
                 if location:
                     location.latitude = latitude
                     location.longitude = longitude
-                    location.address_name = customer_info.location.address_name
+                    location.address_name = customer_info.location.address
                 else:
                     create_location = models.Locations(
                         latitude=latitude,
                         longitude=longitude,
-                        address_name=customer_info.location.address_name
+                        address_name=customer_info.location.address
                     )
                     db.add(create_location)
                     db.commit()
@@ -136,7 +66,7 @@ async def edit_customer(customer_info: EditCustomerBase, db: Session = Depends(g
                 create_location = models.Locations(
                     latitude=latitude,
                     longitude=longitude,
-                    address_name=customer_info.location.address_name
+                    address_name=customer_info.location.address
                 )
                 db.add(create_location)
                 db.commit()
@@ -183,10 +113,10 @@ async def edit_customer(customer_info: EditCustomerBase, db: Session = Depends(g
             'location': customer.location_id
         })
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f'Error {e}')
+        raise HTTPException(status_code=500, detail=f'Error: {str(e)}')
 
 
-@router.delete('/volunteer/profile/', status_code=204)
+@router.delete('/profile/', status_code=204)
 async def delete_profile(
         db: Session = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
@@ -220,7 +150,7 @@ async def delete_profile(
         raise HTTPException(status_code=404, detail=f'Error {e}')
 
 
-@router.post('/volunteer/applications/accept/', status_code=200)
+@router.post('/applications/accept/', status_code=200)
 async def accept_application(
         app_id: AcceptApplicationBase,
         db: Session = Depends(get_db),
@@ -271,7 +201,7 @@ async def accept_application(
         raise HTTPException(status_code=500, detail=f'Error {e}')
 
 
-@router.post('/volunteer/applications/close/', status_code=200)
+@router.post('/applications/close/', status_code=200)
 async def close_application(
         close_info: CloseApplicationBase,
         db: Session = Depends(get_db),
@@ -338,7 +268,7 @@ async def close_application(
         raise HTTPException(status_code=500, detail=f'An error occurred: {str(e)}')
 
 
-@router.post('/volunteer/applications/cancel/', status_code=200)
+@router.post('/applications/cancel/', status_code=200)
 async def cancel_application(
         app_id: CloseApplicationBase,
         db: Session = Depends(get_db),
@@ -382,7 +312,7 @@ async def cancel_application(
         raise HTTPException(status_code=400, detail=f'Error: {e}')
 
 
-@router.get('/volunteer/applications/get')
+@router.get('/applications/get')
 async def get_applications(
         db: Session = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter),
@@ -438,12 +368,10 @@ async def get_applications(
         raise HTTPException(status_code=500, detail=f'Error: {e}')
 
 
-#
-#
 from sqlalchemy import func
 
 
-@router.get('/volunteer/rating/', status_code=200)
+@router.get('/rating/', status_code=200)
 async def get_volunteer_rating(
         db: Session = Depends(get_db),
 ):

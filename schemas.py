@@ -1,16 +1,24 @@
+
 from pydantic import BaseModel, constr
 from datetime import datetime
 from typing import Optional
 
-class RegisterRequest(BaseModel):
-    phone_num: int
-    role: str
-    password: str
+# class RegisterRequest(BaseModel):
+#     phone_num: int
+#     role: int
+#     password: str
 
 
 class LoginRequest(BaseModel):
-    phone_num: int
+    user_id: int
+    role_id: int
+    client: str
     password: str
+
+class LocationCreate(BaseModel):
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class BeneficiaryCreate(BaseModel):
     phone_num: int
@@ -18,6 +26,20 @@ class BeneficiaryCreate(BaseModel):
     firstname: str
     lastname: Optional[str] = None
     patronymic: Optional[str] = None
+    role_id: int
+    client: str
+    password: str
+
+class CreateCustomerBase(BaseModel):
+    phone_num: constr(min_length=12, max_length=12)
+    tg_id: str
+    firstname: str
+    lastname: Optional[str] = None
+    patronymic: Optional[str] = None
+    role_id: int
+    client: str
+    password: str
+    location: Optional[LocationCreate] = None
 
 class ApplicationCreate(BaseModel):
     description: str
@@ -62,17 +84,19 @@ class CategoryCreate(BaseModel):
 class CategoryDelete(BaseModel):
     id: int
 
-
-class CreateCustomerBase(BaseModel):
-    phone_num: int
-    tg_id: int
-    firstname: constr(min_length=1)
-    lastname: constr(min_length=1)
-    patronymic: Optional[constr(min_length=1)] = None
-    categories: Optional[List[int]]
+class Create_Location(BaseModel):
     address: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+
+# class CreateCustomerBase(BaseModel):
+#     phone_num: int
+#     tg_id: int
+#     firstname: constr(min_length=1)
+#     lastname: constr(min_length=1)
+#     patronymic: Optional[constr(min_length=1)] = None
+#     categories: Optional[List[int]]
+#     location: Optional[Create_Location]
 
 class AcceptApplicationBase(BaseModel):
     application_id: int
@@ -83,7 +107,7 @@ class CloseApplicationBase(BaseModel):
 class LocationUpdate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-    address_name: Optional[str] = None
+    address: Optional[str] = None
 
 class EditCustomerBase(BaseModel):
     location: Optional[LocationUpdate] = None

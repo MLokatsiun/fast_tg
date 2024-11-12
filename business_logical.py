@@ -33,69 +33,39 @@ def create_access_token(data: dict, expires_delta: timedelta):
     return jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
 
 
-def create_refresh_token(data: dict):
-    """
-        Generates a refresh token with a predefined expiration date.
-
-        Args:
-            data (dict): Data to be encoded in the token.
-
-        Returns:
-            str: A JWT refresh token string.
-    """
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(days=7)):
     to_encode = data.copy()
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
+    expire = datetime.utcnow() + expires_delta
+    to_encode.update({"exp": expire, "user_id": data.get("user_id")})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
+    return encoded_jwt
 
 
 def get_current_user(token: str, db: Session):
-    """
-        Retrieves the current user from the token.
-
-        Args:
-            token (str): The JWT token for user authentication.
-            db (Session): The database session dependency.
-
-        Raises:
-            HTTPException: If the token is invalid or the user is not found.
-
-        Returns:
-            tuple: A tuple containing the user object and user role.
-    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        user_id = payload.get("sub")
-        user_role = payload.get("role")
-        if user_id is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user_id = payload.get("user_id")
+        role_id = payload.get("role_id")
+
+        if user_id is None or role_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
 
         user = db.query(models.Customer).filter(models.Customer.id == user_id).first()
         if user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-        return user, user_role
+            raise HTTPException(status_code=404, detail="User not found")
+
+        return user, role_id
+
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 def get_current_beneficiary(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    """
-        Retrieves the current beneficiary user from the token.
-
-        Args:
-            token (str): The JWT token for user authentication.
-            db (Session): The database session dependency.
-
-        Raises:
-            HTTPException: If the user does not have the 'beneficiary' role.
-
-        Returns:
-            User: The beneficiary user object.
-    """
     user, user_role = get_current_user(token, db)
-    if user_role != "beneficiary":
+    if user_role != 1:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
     return user
+
 
 
 def get_current_moderator(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -113,7 +83,7 @@ def get_current_moderator(token: str = Depends(oauth2_scheme), db: Session = Dep
             User: The moderator user object.
     """
     user, user_role = get_current_user(token, db)
-    if user_role != "moderator":
+    if user_role != 2:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
     return user
 
@@ -133,7 +103,7 @@ def get_current_volonter(token: str = Depends(oauth2_scheme), db: Session = Depe
             User: The volunteer user object.
     """
     user, user_role = get_current_user(token, db)
-    if user_role != "volunteer":
+    if user_role != 3:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
     return user
 
@@ -157,8 +127,10 @@ def get_coordinates(address: str):
         "format": "json",
         "limit": 1
     }
-
-    response = requests.get(base_url, params=params)
+    headers = {
+        "User-Agent": "api/1.0 (misaloka29@gmail.com)"  # замініть на реальні дані
+    }
+    response = requests.get(base_url, params=params, headers=headers)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail="Помилка під час з'єднання з Nominatim API")
 
@@ -172,7 +144,7 @@ def get_coordinates(address: str):
         "latitude": location["lat"],
         "longitude": location["lon"]
     }
-
+print(get_coordinates("Київ, Україна"))
 
 def get_password_hash(password):
     """

@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import Depends, HTTPException, APIRouter, Query
+from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from starlette.responses import JSONResponse
 from database import get_db
@@ -10,54 +11,63 @@ from schemas import BeneficiaryCreate, ApplicationCreate, ApplicationDelete, App
 
 router = APIRouter()
 
+# @router.post("/register/", status_code=201)
+# async def sign_up_beneficiary(
+#         beneficiary: BeneficiaryCreate,
+#         db: Session = Depends(get_db)
+# ):
+#     """
+#         Реєстрація нового бенефіціара з паролем та клієнтом (frontend чи telegram).
+#     """
+#     # Перевірка чи вже існує бенефіціар з таким телефоном і TG ID
+#     existing_beneficiary = db.query(models.Customer).filter(
+#         models.Customer.phone_num == beneficiary.phone_num,
+#         models.Customer.tg_id == beneficiary.tg_id
+#     ).first()
+#
+#     if existing_beneficiary:
+#         raise HTTPException(status_code=400, detail="Beneficiary with this phone number and TG ID already exists.")
+#
+#     # Перевірка клієнта
+#     client = db.query(models.Client).filter(models.Client.name == beneficiary.client).first()
+#     if not client:
+#         raise HTTPException(status_code=400, detail="Invalid client name")
+#
+#     # Перевірка пароля на сервері
+#     clients = {
+#         "telegram": "1234",  # Пароль для телеграма
+#         "frontend": "4321",  # Пароль для фронтенду
+#     }
+#
+#     # Перевірка, чи є клієнт і чи пароль правильний
+#     if beneficiary.client not in clients or not verify_password(beneficiary.password, clients[beneficiary.client]):
+#         raise HTTPException(status_code=400, detail="Incorrect password for the client.")
+#
+#     # Створюємо нового бенефіціара
+#     new_beneficiary = models.Customer(
+#         phone_num=beneficiary.phone_num,
+#         tg_id=beneficiary.tg_id,
+#         firstname=beneficiary.firstname,
+#         lastname=beneficiary.lastname,
+#         patronymic=beneficiary.patronymic,
+#         client_id=client.id,  # Пов'язуємо з клієнтом
+#
+#     )
+#
+#     db.add(new_beneficiary)
+#     db.commit()
+#     db.refresh(new_beneficiary)
+#
+#     return {
+#         "id": new_beneficiary.id,
+#         "phone_num": new_beneficiary.phone_num,
+#         "tg_id": new_beneficiary.tg_id,
+#         "firstname": new_beneficiary.firstname,
+#         "lastname": new_beneficiary.lastname
+#     }
 
-@router.post("/register/", status_code=201)
-async def sign_up_beneficiary(
-        beneficiary: BeneficiaryCreate,
-        current_beneficiary: models.Customer = Depends(get_current_beneficiary),
-        db: Session = Depends(get_db)
-):
-    """
-        Register a new beneficiary.
 
-        - **beneficiary**: An object of type `BeneficiaryCreate` containing the beneficiary's information.
-        - **current_beneficiary**: The beneficiary currently authenticated in the system.
-        - **db**: The database session.
-
-        **Response:**
-        - 201: Successfully created a new beneficiary with their data.
-        - 400: A beneficiary with this phone number and TG ID already exists.
-    """
-    existing_beneficiary = db.query(models.Customer).filter(
-        models.Customer.phone_num == beneficiary.phone_num,
-        models.Customer.tg_id == beneficiary.tg_id
-    ).first()
-
-    if existing_beneficiary:
-        raise HTTPException(status_code=400, detail="Beneficiary with this phone number and TG ID already exists.")
-
-    new_beneficiary = models.Customer(
-        phone_num=beneficiary.phone_num,
-        tg_id=beneficiary.tg_id,
-        firstname=beneficiary.firstname,
-        lastname=beneficiary.lastname,
-        patronymic=beneficiary.patronymic
-    )
-
-    db.add(new_beneficiary)
-    db.commit()
-    db.refresh(new_beneficiary)
-
-    return {
-        "id": new_beneficiary.id,
-        "phone_num": new_beneficiary.phone_num,
-        "tg_id": new_beneficiary.tg_id,
-        "firstname": new_beneficiary.firstname,
-        "lastname": new_beneficiary.lastname
-    }
-
-
-@router.delete("/delete/", status_code=200)
+@router.delete("/profile/", status_code=200)
 async def delete_beneficiary(current_user=Depends(get_current_beneficiary), db: Session = Depends(get_db)):
     """
         Delete a beneficiary.
@@ -79,7 +89,7 @@ async def delete_beneficiary(current_user=Depends(get_current_beneficiary), db: 
     return {"detail": "Beneficiary deleted successfully"}
 
 
-@router.post("/beneficiary/applications/", status_code=201)
+@router.post("/applications/", status_code=201)
 async def create_application(application: ApplicationCreate, db: Session = Depends(get_db),
                              current_user=Depends(get_current_beneficiary)):
     """
@@ -93,6 +103,7 @@ async def create_application(application: ApplicationCreate, db: Session = Depen
        - 201: Successfully created a new application with its data.
        - 400: Neither address nor coordinates were provided.
     """
+
     if application.address:
         coordinates = get_coordinates(application.address)
         latitude, longitude = coordinates["latitude"], coordinates["longitude"]
@@ -101,15 +112,24 @@ async def create_application(application: ApplicationCreate, db: Session = Depen
     else:
         raise HTTPException(status_code=400, detail="Provide either address or both latitude and longitude.")
 
-    new_location = models.Locations(latitude=latitude, longitude=longitude, address_name=application.address)
-    db.add(new_location)
-    db.commit()
-    db.refresh(new_location)
+    existing_location = db.query(models.Locations).filter(
+        models.Locations.latitude == latitude,
+        models.Locations.longitude == longitude
+    ).first()
+
+    if existing_location:
+        location_id = existing_location.id
+    else:
+        new_location = models.Locations(latitude=latitude, longitude=longitude, address_name=application.address)
+        db.add(new_location)
+        db.commit()
+        db.refresh(new_location)
+        location_id = new_location.id
 
     new_application = models.Applications(
         creator_id=current_user.id,
         category_id=application.category_id,
-        location_id=new_location.id,
+        location_id=location_id,
         description=application.description,
         is_in_progress=False,
         is_done=False,
@@ -127,6 +147,7 @@ async def create_application(application: ApplicationCreate, db: Session = Depen
         "location_id": new_application.location_id,
         "description": new_application.description
     }
+
 
 
 @router.put("/applications/", status_code=200)

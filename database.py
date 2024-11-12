@@ -2,7 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import declarative_base
 
-URL_DATABASE = 'postgresql://postgres:1234@localhost/api'
+URL_DATABASE = 'postgresql://postgres:2117@fast-tg-db/fasttg_db'
 
 engine = create_engine(URL_DATABASE)
 

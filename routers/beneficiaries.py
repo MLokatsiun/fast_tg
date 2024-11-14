@@ -7,78 +7,27 @@ from database import get_db
 from datetime import datetime
 from business_logical import (get_current_beneficiary, get_coordinates)
 import models
-from schemas import BeneficiaryCreate, ApplicationCreate, ApplicationDelete, ApplicationConfirm, ApplicationsList
+from schemas import ApplicationCreate, ApplicationDelete, ApplicationConfirm, ApplicationsList
 
 router = APIRouter()
-
-# @router.post("/register/", status_code=201)
-# async def sign_up_beneficiary(
-#         beneficiary: BeneficiaryCreate,
-#         db: Session = Depends(get_db)
-# ):
-#     """
-#         Реєстрація нового бенефіціара з паролем та клієнтом (frontend чи telegram).
-#     """
-#     # Перевірка чи вже існує бенефіціар з таким телефоном і TG ID
-#     existing_beneficiary = db.query(models.Customer).filter(
-#         models.Customer.phone_num == beneficiary.phone_num,
-#         models.Customer.tg_id == beneficiary.tg_id
-#     ).first()
-#
-#     if existing_beneficiary:
-#         raise HTTPException(status_code=400, detail="Beneficiary with this phone number and TG ID already exists.")
-#
-#     # Перевірка клієнта
-#     client = db.query(models.Client).filter(models.Client.name == beneficiary.client).first()
-#     if not client:
-#         raise HTTPException(status_code=400, detail="Invalid client name")
-#
-#     # Перевірка пароля на сервері
-#     clients = {
-#         "telegram": "1234",  # Пароль для телеграма
-#         "frontend": "4321",  # Пароль для фронтенду
-#     }
-#
-#     # Перевірка, чи є клієнт і чи пароль правильний
-#     if beneficiary.client not in clients or not verify_password(beneficiary.password, clients[beneficiary.client]):
-#         raise HTTPException(status_code=400, detail="Incorrect password for the client.")
-#
-#     # Створюємо нового бенефіціара
-#     new_beneficiary = models.Customer(
-#         phone_num=beneficiary.phone_num,
-#         tg_id=beneficiary.tg_id,
-#         firstname=beneficiary.firstname,
-#         lastname=beneficiary.lastname,
-#         patronymic=beneficiary.patronymic,
-#         client_id=client.id,  # Пов'язуємо з клієнтом
-#
-#     )
-#
-#     db.add(new_beneficiary)
-#     db.commit()
-#     db.refresh(new_beneficiary)
-#
-#     return {
-#         "id": new_beneficiary.id,
-#         "phone_num": new_beneficiary.phone_num,
-#         "tg_id": new_beneficiary.tg_id,
-#         "firstname": new_beneficiary.firstname,
-#         "lastname": new_beneficiary.lastname
-#     }
 
 
 @router.delete("/profile/", status_code=200)
 async def delete_beneficiary(current_user=Depends(get_current_beneficiary), db: Session = Depends(get_db)):
     """
-        Delete a beneficiary.
+        Видалити бенефіціара.
 
-        - **current_user**: The beneficiary currently authenticated in the system.
-        - **db**: The database session.
+        - **current_user**: Бенефіціар, який наразі аутентифікований в системі.
+        - **db**: Сесія бази даних.
 
-        **Response:**
-        - 200: Successfully deleted the beneficiary.
-        - 404: Beneficiary not found.
+        **Відповідь:**
+        - 200: Бенефіціар успішно видалений.
+        - 404: Бенефіціара не знайдено.
     """
+
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+
     beneficiary = db.query(models.Customer).filter(models.Customer.id == current_user.id).first()
     if not beneficiary:
         raise HTTPException(status_code=404, detail="Beneficiary not found")
@@ -93,16 +42,17 @@ async def delete_beneficiary(current_user=Depends(get_current_beneficiary), db: 
 async def create_application(application: ApplicationCreate, db: Session = Depends(get_db),
                              current_user=Depends(get_current_beneficiary)):
     """
-       Create a new application.
+        Видалити бенефіціара.
 
-       - **application**: An object of type `ApplicationCreate` containing application data.
-       - **db**: The database session.
-       - **current_user**: The beneficiary currently authenticated in the system.
+        - **current_user**: Бенефіціар, який наразі аутентифікований в системі.
+        - **db**: Сесія бази даних.
 
-       **Response:**
-       - 201: Successfully created a new application with its data.
-       - 400: Neither address nor coordinates were provided.
+        **Відповідь:**
+        - 200: Бенефіціар успішно видалений.
+        - 404: Бенефіціара не знайдено.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     if application.address:
         coordinates = get_coordinates(application.address)
@@ -157,17 +107,20 @@ async def confirm_application(
         current_user: models.Customer = Depends(get_current_beneficiary)  # Залежність для бенефіціара
 ):
     """
-        Confirm the execution of an application.
+            Підтвердити виконання заявки.
 
-        - **application_confirm**: An object of type `ApplicationConfirm` containing the application ID.
-        - **db**: The database session.
-        - **current_user**: The beneficiary currently authenticated in the system.
+            - **application_confirm**: Об'єкт типу `ApplicationConfirm`, що містить ID заявки.
+            - **db**: Сесія бази даних.
+            - **current_user**: Бенефіціар, який наразі аутентифікований в системі.
 
-        **Response:**
-        - 200: Successfully confirmed the application.
-        - 404: Application not found.
-        - 400: No executor assigned, or the task has not been marked as done.
-    """
+            **Відповідь:**
+            - 200: Заявка успішно підтверджена.
+            - 404: Заявку не знайдено.
+            - 400: Виконавець не призначений, або завдання не позначене як виконане.
+        """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+
     application = db.query(models.Applications).filter(
         models.Applications.id == application_confirm.application_id).first()
 
@@ -194,16 +147,19 @@ async def delete_application(
         current_user: models.Customer = Depends(get_current_beneficiary)  # Залежність для бенефіціара
 ):
     """
-        Delete an application.
+            Видалити заявку.
 
-        - **application_delete**: An object of type `ApplicationDelete` containing the application ID.
-        - **db**: The database session.
-        - **current_user**: The beneficiary currently authenticated in the system.
+            - **application_delete**: Об'єкт типу `ApplicationDelete`, що містить ID заявки.
+            - **db**: Сесія бази даних.
+            - **current_user**: Бенефіціар, який наразі аутентифікований в системі.
 
-        **Response:**
-        - 204: Successfully deleted the application.
-        - 404: Application not found.
-    """
+            **Відповідь:**
+            - 204: Заявка успішно видалена.
+            - 404: Заявку не знайдено.
+        """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+
     application = db.query(models.Applications).filter(
         models.Applications.id == application_delete.application_id).first()
 
@@ -221,16 +177,18 @@ async def get_applications(
         current_user: str = Depends(get_current_beneficiary)
 ):
     """
-    Retrieve a list of applications by type.
+    Отримати список заявок за типом.
 
-    - **type**: The type of applications (required): 'available', 'in_progress', 'finished'.
-    - **db**: The database session.
-    - **current_user**: The beneficiary currently authenticated in the system.
+    - **type**: Тип заявок (обов'язково): 'available', 'in_progress', 'finished'.
+    - **db**: Сесія бази даних.
+    - **current_user**: Бенефіціар, який наразі аутентифікований в системі.
 
-    **Response:**
-    - 200: A list of applications corresponding to the specified type.
-    - 404: Invalid applications type.
+    **Відповідь:**
+    - 200: Список заявок, що відповідають вказаному типу.
+    - 404: Некоректний тип заявок.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
 
         if type == 'available':

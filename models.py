@@ -69,12 +69,13 @@ class Customer(Base):
     role_id = Column(Integer, ForeignKey("Roles.id"))
     location_id = Column(Integer, ForeignKey('Locations.id'))
     client_id = Column(Integer, ForeignKey('Clients.id'))
+    is_verified = Column(Boolean, default=False)
 
     location = relationship("Locations", primaryjoin="Customer.location_id == Locations.id")
     applications = relationship('Applications', back_populates='customer')
     roles = relationship('Roles', secondary='Ink_CustomerRole', back_populates='customers')
     client = relationship('Client', back_populates='customers')
-
+    # moderator = relationship('Moderators', back_populates='customers')
 
 class Categories(Base):
     __tablename__ = 'Categories'
@@ -109,7 +110,6 @@ class Applications(Base):
     location = relationship('Locations', back_populates='applications')
     media = relationship('Media', secondary='Ink_ApplicationsMedia')
 
-
 class Roles(Base):
     __tablename__ = 'Roles'
 
@@ -117,7 +117,7 @@ class Roles(Base):
     name = Column(String, unique=True, index=True)
 
     customers = relationship('Customer', secondary='Ink_CustomerRole', back_populates='roles')
-
+    moderators = relationship('Moderators', back_populates='role')
 
 class Ink_CustomerRole(Base):
     __tablename__ = 'Ink_CustomerRole'
@@ -159,26 +159,6 @@ class Ink_CustomerCategories(Base):
     category = relationship('Categories')
 
 
-# class UserVerification(Base):
-#     __tablename__ = 'UserVerification'
-#
-#     id = Column(Integer, primary_key=True, index=True)
-#     phone_num = Column(BigInteger, unique=True, nullable=False)
-#     password_hash = Column(String, nullable=False)
-#     role_id = Column(Integer, ForeignKey('Roles.id'), nullable=False)
-#     extra_info = Column(String, nullable=True)
-#
-#     role = relationship('Roles', back_populates='user_verifications')
-#
-#
-# class User(Base):
-#     __tablename__ = "users"
-#
-#     id = Column(Integer, primary_key=True, index=True)
-#     phone_num = Column(Integer, unique=True, index=True)
-#     role = Column(String, index=True)
-#     password = Column(String)
-
 class Client(Base):
     __tablename__ = 'Clients'
 
@@ -186,4 +166,19 @@ class Client(Base):
     name = Column(String, unique=True, nullable=False)
 
     customers = relationship('Customer', back_populates='client')
+    moderators = relationship('Moderators', back_populates='client')
+
+class Moderators(Base):
+    __tablename__ = 'Moderators'
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    phone_number = Column(String, unique=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    client_id = Column(Integer, ForeignKey('Clients.id'), nullable=False)
+    role_id = Column(Integer, ForeignKey('Roles.id'))
+
+    client = relationship('Client', back_populates='moderators')
+
+    role = relationship('Roles', back_populates='moderators')
+
 

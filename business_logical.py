@@ -7,7 +7,7 @@ import models
 import requests
 from passlib.context import CryptContext
 from database import get_db
-
+from models import Customer, Moderators
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = '884e824f5571d0acf70e2cc8600c2deb68dcc302c2402a1838ef2b38e9b22ade'
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -41,7 +41,19 @@ def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(days=7
     return encoded_jwt
 
 
-def get_current_user(token: str, db: Session):
+def get_current_user(token: str, db: Session = Depends(get_db)):
+    """
+    Retrieves the current user from the token, including checks for both customers and moderators.
+
+    Args:
+        token (str): The JWT token for user authentication.
+        db (Session): The database session dependency.
+
+    Returns:
+        tuple: (user, role_id)
+            user (object): The user object (either customer or moderator).
+            role_id (int): The role ID of the user (e.g., 2 for moderator, 3 for customer).
+    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         user_id = payload.get("user_id")
@@ -50,7 +62,11 @@ def get_current_user(token: str, db: Session):
         if user_id is None or role_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-        user = db.query(models.Customer).filter(models.Customer.id == user_id).first()
+        user = db.query(Customer).filter(Customer.id == user_id).first()
+
+        if user is None:
+            user = db.query(Moderators).filter(Moderators.id == user_id).first()
+
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
 
@@ -83,7 +99,7 @@ def get_current_moderator(token: str = Depends(oauth2_scheme), db: Session = Dep
             User: The moderator user object.
     """
     user, user_role = get_current_user(token, db)
-    if user_role != 2:
+    if user_role != 3:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
     return user
 
@@ -103,7 +119,7 @@ def get_current_volonter(token: str = Depends(oauth2_scheme), db: Session = Depe
             User: The volunteer user object.
     """
     user, user_role = get_current_user(token, db)
-    if user_role != 3:
+    if user_role != 2:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions")
     return user
 

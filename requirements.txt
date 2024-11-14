@@ -9,3 +9,5 @@ geopy
 requests
 psycopg2-binary
 bcrypt
+asyncpg
+fastapi-admin

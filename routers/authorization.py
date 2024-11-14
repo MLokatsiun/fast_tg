@@ -6,8 +6,7 @@ import models
 from datetime import timedelta
 from jose import JWTError, jwt
 from schemas import LoginRequest, CreateCustomerBase
-from business_logical import ACCESS_TOKEN_EXPIRE_MINUTES, create_refresh_token, SECRET_KEY, REFRESH_TOKEN_EXPIRE_DAYS, \
-    get_coordinates
+from business_logical import ACCESS_TOKEN_EXPIRE_MINUTES, create_refresh_token, SECRET_KEY, REFRESH_TOKEN_EXPIRE_DAYS, get_coordinates
 
 router = APIRouter()
 
@@ -20,13 +19,26 @@ async def register_user(
         user_info: CreateCustomerBase,
         db: Session = Depends(get_db)
 ):
-    # Перевірка наявності користувача
+    """
+        Реєстрація нового користувача (волонтера чи бенефіціара) у системі.
+
+        Аргументи:
+            user_info (CreateCustomerBase): Інформація про користувача для реєстрації.
+            db (Session): Залежність для підключення до бази даних.
+
+        Винятки:
+            HTTPException: Якщо користувач з таким номером телефону та TG ID вже існує, або якщо дані введені неправильно.
+
+        Повертає:
+            JSONResponse: Відповідь з даними зареєстрованого користувача.
+        """
     existing_user = db.query(models.Customer).filter(
         models.Customer.phone_num == user_info.phone_num,
         models.Customer.tg_id == user_info.tg_id
     ).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="User with this phone number and TG ID already exists.")
+
 
     clients = {
         "telegram": TELEGRAM_PASSWORD,
@@ -39,14 +51,18 @@ async def register_user(
     if user_info.password != clients[user_info.client]:
         raise HTTPException(status_code=400, detail="Invalid client or password.")
 
-    if user_info.role_id == 3:
+
+    is_verified = False
+
+
+    if user_info.role_id == 2:
         if not user_info.location:
             raise HTTPException(status_code=400, detail="Location data is required for volunteers.")
+
 
         if user_info.location.address:
             coordinates = get_coordinates(user_info.location.address)
             latitude, longitude = coordinates["latitude"], coordinates["longitude"]
-
         elif user_info.location.latitude is not None and user_info.location.longitude is not None:
             latitude, longitude = user_info.location.latitude, user_info.location.longitude
         else:
@@ -59,10 +75,8 @@ async def register_user(
         ).first()
 
         if existing_location:
-
             location_id = existing_location.id
         else:
-
             location_entry = models.Locations(
                 latitude=latitude,
                 longitude=longitude,
@@ -73,6 +87,7 @@ async def register_user(
             db.refresh(location_entry)
             location_id = location_entry.id
     else:
+
         if user_info.location:
             raise HTTPException(status_code=400, detail="Location data is not required for beneficiaries.")
         location_id = None
@@ -91,13 +106,13 @@ async def register_user(
         patronymic=user_info.patronymic,
         role_id=user_info.role_id,
         client_id=client_entry.id,
-        location_id=location_id
+        location_id=location_id,
+        is_verified=is_verified
     )
 
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-
 
     return {
         "id": new_user.id,
@@ -106,13 +121,25 @@ async def register_user(
         "firstname": new_user.firstname,
         "lastname": new_user.lastname,
         "role_id": new_user.role_id,
-        "location_id": location_id
+        "location_id": location_id,
+        "is_verified": new_user.is_verified
     }
-
-
 
 @router.post("/login/", status_code=200)
 async def client_login(login_request: LoginRequest, db: Session = Depends(get_db)):
+    """
+        Авторизація користувача за допомогою логіну та пароля.
+
+        Аргументи:
+            login_request (LoginRequest): Дані для входу (user_id, role_id, client, password).
+            db (Session): Залежність для підключення до бази даних.
+
+        Винятки:
+            HTTPException: Якщо клієнт чи пароль введено неправильно, або користувач не знайдений.
+
+        Повертає:
+            JSONResponse: Відповідь з токенами доступу.
+        """
     if login_request.client not in ["frontend", "telegram"]:
         raise HTTPException(status_code=400, detail="Invalid client type")
 
@@ -148,6 +175,19 @@ async def client_login(login_request: LoginRequest, db: Session = Depends(get_db
 
 @router.post("/refresh/")
 async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
+    """
+        Оновлення токена доступу за допомогою refresh token.
+
+        Аргументи:
+            refresh_token (str): Токен для оновлення доступу.
+            db (Session): Залежність для підключення до бази даних.
+
+        Винятки:
+            HTTPException: Якщо refresh токен є некоректним або користувач не знайдений.
+
+        Повертає:
+            JSONResponse: Відповідь з новим access токеном.
+        """
     try:
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=['HS256'])
         user_id = payload.get("user_id")

@@ -1,16 +1,10 @@
-
 from pydantic import BaseModel, constr
 from datetime import datetime
 from typing import Optional
 
-# class RegisterRequest(BaseModel):
-#     phone_num: int
-#     role: int
-#     password: str
-
 
 class LoginRequest(BaseModel):
-    user_id: int
+    tg_id: constr(min_length=9, max_length=10)
     role_id: int
     client: str
     password: str
@@ -20,19 +14,10 @@ class LocationCreate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
-class BeneficiaryCreate(BaseModel):
-    phone_num: int
-    tg_id: int
-    firstname: str
-    lastname: Optional[str] = None
-    patronymic: Optional[str] = None
-    role_id: int
-    client: str
-    password: str
 
 class CreateCustomerBase(BaseModel):
     phone_num: constr(min_length=12, max_length=12)
-    tg_id: str
+    tg_id: constr(min_length=9, max_length=10)
     firstname: str
     lastname: Optional[str] = None
     patronymic: Optional[str] = None
@@ -47,6 +32,8 @@ class ApplicationCreate(BaseModel):
     address: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    active_to: str
+
 
 class ApplicationConfirm(BaseModel):
     application_id: int
@@ -80,6 +67,7 @@ class ApplicationsList(BaseModel):
 class CategoryCreate(BaseModel):
     name: str
     parent_id: Optional[int] = None
+    active_duration: Optional[int] = None
 
 class CategoryDelete(BaseModel):
     id: int
@@ -89,20 +77,16 @@ class Create_Location(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
-# class CreateCustomerBase(BaseModel):
-#     phone_num: int
-#     tg_id: int
-#     firstname: constr(min_length=1)
-#     lastname: constr(min_length=1)
-#     patronymic: Optional[constr(min_length=1)] = None
-#     categories: Optional[List[int]]
-#     location: Optional[Create_Location]
-
 class AcceptApplicationBase(BaseModel):
     application_id: int
 
-class CloseApplicationBase(BaseModel):
+class FileData(BaseModel):
+    filename: str
+    filedata: str  # Строка с base64-кодированными данными
+
+class CloseApplicationRequest(BaseModel):
     application_id: int
+    files: List[FileData]
 
 class LocationUpdate(BaseModel):
     latitude: Optional[float] = None
@@ -112,3 +96,21 @@ class LocationUpdate(BaseModel):
 class EditCustomerBase(BaseModel):
     location: Optional[LocationUpdate] = None
     categories: Optional[List[int]] = None
+
+class VerificationUser(BaseModel):
+    user_id: int
+    is_verified: bool
+
+class VerificationResponse(BaseModel):
+    id: int
+    is_verified: bool
+    message: str
+
+class ModeratorLoginRequest(BaseModel):
+    phone_number: str
+    password: str
+    client: str
+    client_password: str
+
+
+

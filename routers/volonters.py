@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 import os
 import base64
 from fastapi.responses import JSONResponse
+from sqlalchemy.sql.functions import current_user
+
 from database import get_db
-from business_logical import (get_current_volonter, get_coordinates)
+from business_logical import (get_current_volonter, get_coordinates, get_current_user)
 import models
 from schemas import CreateCustomerBase, EditCustomerBase, CloseApplicationBase, AcceptApplicationBase
 from typing import Optional
@@ -19,23 +21,28 @@ async def edit_customer(
         volunteer: models.Customer = Depends(get_current_volonter)
 ):
     """
-        Edit an existing volunteer's profile.
+    Редагувати профіль існуючого волонтера.
 
-        Args:
-            customer_info (EditCustomerBase): Information for editing the volunteer's profile.
-            db (Session): The database session dependency.
-            volunteer (models.Customer): The current logged-in volunteer.
+    Аргументи:
+        customer_info (EditCustomerBase): Інформація для редагування профілю волонтера.
+        db (Session): Залежність для підключення до бази даних.
+        volunteer (models.Customer): Поточний авторизований волонтер.
 
-        Raises:
-            HTTPException: If the volunteer's profile cannot be updated.
+    Винятки:
+        HTTPException: Якщо профіль волонтера не може бути оновлений або доступ до нього обмежений.
 
-        Returns:
-            JSONResponse: A response containing the updated volunteer's information.
+    Повертає:
+        JSONResponse: Відповідь з оновленою інформацією волонтера.
     """
+    if not volunteer.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+
     try:
         customer = volunteer
 
+
         if customer_info.location is not None:
+
             if customer_info.location.latitude is None or customer_info.location.longitude is None:
                 if customer_info.location.address:
                     coordinates = get_coordinates(customer_info.location.address)
@@ -47,32 +54,25 @@ async def edit_customer(
                 latitude = customer_info.location.latitude
                 longitude = customer_info.location.longitude
 
-            if customer.location_id:
-                location = db.query(models.Locations).filter(models.Locations.id == customer.location_id).first()
-                if location:
-                    location.latitude = latitude
-                    location.longitude = longitude
-                    location.address_name = customer_info.location.address
-                else:
-                    create_location = models.Locations(
-                        latitude=latitude,
-                        longitude=longitude,
-                        address_name=customer_info.location.address
-                    )
-                    db.add(create_location)
-                    db.commit()
-                    customer.location_id = create_location.id
-            else:
-                create_location = models.Locations(
+
+            location = db.query(models.Locations).filter(
+                models.Locations.latitude == latitude,
+                models.Locations.longitude == longitude,
+                models.Locations.address_name == customer_info.location.address
+            ).first()
+
+
+            if not location:
+                location = models.Locations(
                     latitude=latitude,
                     longitude=longitude,
                     address_name=customer_info.location.address
                 )
-                db.add(create_location)
+                db.add(location)
                 db.commit()
-                customer.location_id = create_location.id
 
-            db.commit()
+
+            customer.location_id = location.id
 
         if customer_info.categories is not None:
             current_categories = db.query(models.Ink_CustomerCategories).filter(
@@ -121,19 +121,22 @@ async def delete_profile(
         db: Session = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
+
     """
-        Delete the current volunteer's profile.
+    Видалити профіль поточного волонтера.
 
-        Args:
-            db (Session): The database session dependency.
-            current_volunteer (models.Customer): The current logged-in volunteer.
+    Аргументи:
+        db (Session): Залежність для підключення до бази даних.
+        current_volunteer (models.Customer): Поточний авторизований волонтер.
 
-        Raises:
-            HTTPException: If the volunteer's profile cannot be found or deleted.
+    Винятки:
+        HTTPException: Якщо профіль волонтера не знайдений або виникла помилка при його видаленні.
 
-        Returns:
-            None: Indicates successful deletion.
+    Повертає:
+        None: Успішне видалення профілю.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         profile = db.query(models.Customer).filter(models.Customer.tg_id == current_volunteer.tg_id).first()
 
@@ -157,19 +160,21 @@ async def accept_application(
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
     """
-        Accept an application assigned to the current volunteer.
+    Прийняти заявку, призначивши її виконання поточному волонтеру.
 
-        Args:
-            app_id (AcceptApplicationBase): The ID of the application to be accepted.
-            db (Session): The database session dependency.
-            current_volunteer (models.Customer): The current logged-in volunteer.
+    Аргументи:
+        app_id (AcceptApplicationBase): ID заявки для прийняття.
+        db (Session): Залежність для підключення до бази даних.
+        current_volunteer (models.Customer): Поточний авторизований волонтер.
 
-        Raises:
-            HTTPException: If the application cannot be found or accepted.
+    Винятки:
+        HTTPException: Якщо заявка не знайдена або неможливо її прийняти.
 
-        Returns:
-            JSONResponse: A response containing the accepted application's details.
+    Повертає:
+        JSONResponse: Відповідь з деталями прийнятої заявки.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         customer = db.query(models.Customer).filter(models.Customer.tg_id == current_volunteer.tg_id).first()
 
@@ -208,19 +213,21 @@ async def close_application(
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
     """
-    Close an application by saving images and updating its status.
+        Закрити заявку після її виконання, зберігаючи файли.
 
-    Args:
-        close_info (CloseApplicationBase): Information about the application to close and associated files.
-        db (Session): The database session dependency.
-        current_volunteer (models.Customer): The current logged-in volunteer.
+        Аргументи:
+            close_info (CloseApplicationBase): Інформація про заявку, яку треба закрити, і файли, що зберігаються.
+            db (Session): Залежність для підключення до бази даних.
+            current_volunteer (models.Customer): Поточний авторизований волонтер.
 
-    Raises:
-        HTTPException: If the application cannot be found, closed, or if there is an error saving files.
+        Винятки:
+            HTTPException: Якщо заявка не знайдена, неможливо зберегти файли або виникла інша помилка.
 
-    Returns:
-        JSONResponse: A response containing details of the closed application.
-    """
+        Повертає:
+            JSONResponse: Відповідь з деталями закритої заявки та її файлів.
+        """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         application = db.query(models.Applications).filter(models.Applications.id == close_info.application_id).first()
         if not application:
@@ -288,6 +295,8 @@ async def cancel_application(
     Returns:
         JSONResponse: A response indicating successful cancellation.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         application = db.query(models.Applications).filter(models.Applications.id == app_id.application_id).first()
 
@@ -319,19 +328,21 @@ async def get_applications(
         type: Optional[str] = Query(...)
 ):
     """
-        Get a list of applications based on their status.
+        Скасувати заявку, якщо вона була прийнята волонтером.
 
-        Args:
-            type (str): The type of applications to retrieve (available, in_progress, finished).
-            db (Session): The database session dependency.
-            current_volunteer (models.Customer): The current logged-in volunteer.
+        Аргументи:
+            app_id (CloseApplicationBase): ID заявки для скасування.
+            db (Session): Залежність для підключення до бази даних.
+            current_volunteer (models.Customer): Поточний авторизований волонтер.
 
-        Raises:
-            HTTPException: If the application type is invalid or if an error occurs.
+        Винятки:
+            HTTPException: Якщо заявка не знайдена або волонтер не має доступу до її скасування.
 
-        Returns:
-            JSONResponse: A list of applications matching the requested type.
-    """
+        Повертає:
+            JSONResponse: Відповідь з деталями скасованої заявки.
+        """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         if type == 'available':
             applications = db.query(models.Applications).filter(
@@ -376,18 +387,20 @@ async def get_volunteer_rating(
         db: Session = Depends(get_db),
 ):
     """
-        Get the rating of volunteers based on their completed applications.
+    Отримати рейтинг волонтерів на основі кількості закритих заявок.
 
-        Args:
-            db (Session): The database session dependency.
-            current_volunteer (models.Customer): The current logged-in volunteer.
+    Аргументи:
+        db (Session): Залежність для підключення до бази даних.
+        current_user (models.Customer): Поточний авторизований користувач (волонтер).
 
-        Raises:
-            HTTPException: If an error occurs while fetching the rating.
+    Винятки:
+        HTTPException: Якщо користувач не авторизований або виникла помилка при отриманні даних.
 
-        Returns:
-            JSONResponse: A list of volunteer ratings.
+    Повертає:
+        JSONResponse: Список волонтерів з кількістю закритих заявок, відсортованих за цією кількістю.
     """
+    if not current_user.is_verified:
+        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
     try:
         results = (
             db.query(

@@ -1,25 +1,23 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-URL_DATABASE = 'postgresql://postgres:2117@fast-tg-db/fasttg_db'
 
-engine = create_engine(URL_DATABASE)
+URL_DATABASE = 'postgresql+asyncpg://postgres:2117@185.161.209.220:9039/fasttg_db'
 
-session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+engine = create_async_engine(URL_DATABASE, echo=True)
+
+SessionLocal = sessionmaker(
+    engine, class_=AsyncSession, expire_on_commit=False
+)
 
 Base = declarative_base()
 
-
-def get_db():
+async def get_db():
     """
-    Establishes a database session for requests.
+    Establishes an asynchronous database session for requests.
 
     Returns:
-        Session: A database session.
+        AsyncSession: An asynchronous database session.
     """
-    db = session_local()
-    try:
+    async with SessionLocal() as db:
         yield db
-    finally:
-        db.close()

@@ -2,18 +2,20 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from models import Base  # Імпорт основного класу моделей
-import os
+from decouple import config
+
+# Завантаження змінних середовища з файлу .env
+DATABASE_URL = config("DATABASE_URL")
 
 # Ця частина налаштовує логування з файлу alembic.ini
-config = context.config
-fileConfig(config.config_file_name)
+fileConfig(context.config.config_file_name)
 
 # Додавання основного класу моделей для автогенерації міграцій
 target_metadata = Base.metadata
 
-# Підключення до бази даних через sqlalchemy.url з файлу конфігурації alembic.ini
 def get_url():
-    return os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+    """Отримує URL підключення до бази даних з файлу .env."""
+    return DATABASE_URL
 
 def run_migrations_offline():
     """Запускає міграції в 'offline' режимі."""
@@ -31,10 +33,9 @@ def run_migrations_offline():
 def run_migrations_online():
     """Запускає міграції в 'online' режимі."""
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        {"sqlalchemy.url": get_url()},
         prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        url=get_url()
+        poolclass=pool.NullPool
     )
 
     with connectable.connect() as connection:

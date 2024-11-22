@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
-from schemas import CreateCustomerBase
+from schemas import CreateCustomerBase, RefreshTokenRequest
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter()
@@ -45,14 +45,14 @@ async def register_user(
             }
         }
         ```
-        - **phone_num**: Номер телефону у форматі `+380123456789`.
-        - **tg_id**: Telegram ID користувача.
+        - **phone_num**: Номер телефону у форматі `380123456789`.
+        - **tg_id**: Telegram ID користувача (9-10 цифр).
         - **firstname**: Ім'я користувача.
         - **lastname**: (Опціонально) Прізвище користувача.
         - **patronymic**: (Опціонально) По батькові користувача.
         - **role_id**: ID ролі користувача (1 — бенефіціар, 2 — волонтер).
         - **client**: Назва клієнта, з яким пов'язаний користувач.
-        - **password**: Пароль для облікового запису.
+        - **password**: Пароль клієнта.
         - **location**: (Опціонально) Інформація про локацію (для волонтера).
 
     - **Обмеження**:
@@ -105,68 +105,108 @@ async def register_user(
     """
 
     try:
-        result = await db.execute(select(models.Customer).filter(
-            models.Customer.phone_num == user_info.phone_num,
-            models.Customer.tg_id == user_info.tg_id
-        ))
+        # Перевірка існування ролі
+        role_check_result = await db.execute(
+            select(models.Roles).filter(models.Roles.id == user_info.role_id)
+        )
+        role_entry = role_check_result.scalars().first()
+        if not role_entry:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid role_id: {user_info.role_id}. Role does not exist in the Roles table."
+            )
+
+        # Перевірка унікальності TG ID для ролі
+        tg_id_check_result = await db.execute(
+            select(models.Customer).filter(
+                models.Customer.tg_id == user_info.tg_id,
+                models.Customer.role_id == user_info.role_id
+            )
+        )
+        existing_user_with_tg_id = tg_id_check_result.scalars().first()
+        if existing_user_with_tg_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User with TG ID {user_info.tg_id} already exists for role ID {user_info.role_id}."
+            )
+
+        # Перевірка існування користувача за номером телефону та TG ID
+        result = await db.execute(
+            select(models.Customer).filter(
+                models.Customer.phone_num == user_info.phone_num,
+                models.Customer.tg_id == user_info.tg_id
+            )
+        )
         existing_user = result.scalars().first()
+        if existing_user:
+            if existing_user.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail="User with this phone number and TG ID already exists and is active."
+                )
+            else:
+                # Оновлення неактивного користувача
+                existing_user.firstname = user_info.firstname
+                existing_user.lastname = user_info.lastname
+                existing_user.patronymic = user_info.patronymic
+                existing_user.role_id = user_info.role_id
 
-        if existing_user and existing_user.is_active:
-            raise HTTPException(status_code=400,
-                                detail="User with this phone number and TG ID already exists and is active.")
+                client_result = await db.execute(
+                    select(models.Client).filter(models.Client.name == user_info.client)
+                )
+                client_entry = client_result.scalars().first()
+                if not client_entry:
+                    raise HTTPException(status_code=400, detail="Invalid client.")
+                existing_user.client_id = client_entry.id
 
-        if existing_user and not existing_user.is_active:
-            existing_user.firstname = user_info.firstname
-            existing_user.lastname = user_info.lastname
-            existing_user.patronymic = user_info.patronymic
-            existing_user.role_id = user_info.role_id
+                existing_user.location_id = None
+                existing_user.is_active = True
+                existing_user.is_verified = False
+                await db.commit()
+                await db.refresh(existing_user)
+                return {
+                    "id": existing_user.id,
+                    "phone_num": existing_user.phone_num,
+                    "tg_id": existing_user.tg_id,
+                    "firstname": existing_user.firstname,
+                    "lastname": existing_user.lastname,
+                    "role_id": existing_user.role_id,
+                    "is_active": existing_user.is_active,
+                    "is_verified": existing_user.is_verified
+                }
 
-            client_result = await db.execute(select(models.Client).filter(models.Client.name == user_info.client))
-            client_entry = client_result.scalars().first()
-            if not client_entry:
-                raise HTTPException(status_code=400, detail="Invalid client.")
-            existing_user.client_id = client_entry.id
-
-            existing_user.location_id = None
-            existing_user.is_active = True
-            existing_user.is_verified = False
-            await db.commit()
-            await db.refresh(existing_user)
-            return {
-                "id": existing_user.id,
-                "phone_num": existing_user.phone_num,
-                "tg_id": existing_user.tg_id,
-                "firstname": existing_user.firstname,
-                "lastname": existing_user.lastname,
-                "role_id": existing_user.role_id,
-                "is_active": existing_user.is_active,
-                "is_verified": existing_user.is_verified
-            }
-
-        client_result = await db.execute(select(models.Client).filter(models.Client.name == user_info.client))
+        # Перевірка існування клієнта
+        client_result = await db.execute(
+            select(models.Client).filter(models.Client.name == user_info.client)
+        )
         client_entry = client_result.scalars().first()
         if not client_entry:
             raise HTTPException(status_code=400, detail="Invalid client.")
 
+        # Робота з локацією
         location_id = None
         if user_info.role_id == 2:
             if not user_info.location:
                 raise HTTPException(status_code=400, detail="Location data is required for volunteers.")
 
             if user_info.location.address:
-                coordinates = await get_coordinates(user_info.location.address)
-                latitude = float(coordinates["latitude"])
-                longitude = float(coordinates["longitude"])
+                coordinates = await get_coordinates(address=user_info.location.address)
+                latitude = coordinates["latitude"]
+                longitude = coordinates["longitude"]
+                address_name = user_info.location.address
             elif user_info.location.latitude is not None and user_info.location.longitude is not None:
                 latitude = float(user_info.location.latitude)
                 longitude = float(user_info.location.longitude)
+
+                reverse_coordinates = await get_coordinates(lat=latitude, lng=longitude)
+                address_name = reverse_coordinates.get("address", "Unknown Address")
             else:
                 raise HTTPException(status_code=400, detail="Provide either address or both latitude and longitude.")
 
             location_query = select(models.Locations).filter(
                 models.Locations.latitude == latitude,
                 models.Locations.longitude == longitude,
-                models.Locations.address_name == user_info.location.address
+                models.Locations.address_name == address_name
             )
             location_result = await db.execute(location_query)
             existing_location = location_result.scalars().first()
@@ -177,7 +217,7 @@ async def register_user(
                 location_entry = models.Locations(
                     latitude=latitude,
                     longitude=longitude,
-                    address_name=user_info.location.address
+                    address_name=address_name
                 )
                 db.add(location_entry)
                 await db.commit()
@@ -187,6 +227,7 @@ async def register_user(
             if user_info.location:
                 raise HTTPException(status_code=400, detail="Location data is not required for beneficiaries.")
 
+        # Створення нового користувача
         new_user = models.Customer(
             phone_num=user_info.phone_num,
             tg_id=user_info.tg_id,
@@ -242,7 +283,7 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
         - **tg_id**: Telegram ID користувача.
         - **role_id**: ID ролі користувача (1 — бенефіціар, 2 — волонтер).
         - **client**: Назва клієнта, з яким пов'язаний користувач.
-        - **password**: Пароль для аутентифікації.
+        - **password**: Пароль клієнта для аутентифікації.
 
     - **Обмеження**:
       - Користувач має бути активним (`is_active: true`).
@@ -302,6 +343,8 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
     if not pwd_context.verify(login_request.password, client_entry.password):
         raise HTTPException(status_code=400, detail="Incorrect password for client")
 
+
+
     user_result = await db.execute(select(models.Customer).filter(
         models.Customer.tg_id == login_request.tg_id,
         models.Customer.role_id == login_request.role_id
@@ -313,6 +356,9 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User profile is not active. Please contact support.")
+
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="User is not verified. Please contact support.")
 
     token_data = {
         "user_id": user.id,
@@ -330,7 +376,10 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
 
 
 @router.post("/refresh/")
-async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
+async def refresh_token(
+        token_request: RefreshTokenRequest,
+        db: AsyncSession = Depends(get_db)
+):
     """
     **Оновлення токена доступу.**
 
@@ -341,18 +390,16 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
       - **refresh_token**: Токен оновлення, виданий під час аутентифікації:
         ```json
         {
-            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR..."
+            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR...<your-refresh-token>..."
         }
         ```
+      - **refresh_token** має бути дійсним і виданим для існуючого користувача.
 
-    - **Обмеження**:
-      - Токен оновлення має бути дійсним і виданим для існуючого користувача.
-
-    **Відповідь:**
+    **Відповідь**:
     - **200**: Успішне оновлення токена доступу. Повертається новий токен:
         ```json
         {
-            "access_token": "eyJhbGciOiJIUzI1NiIsInR...",
+            "access_token": "eyJhbGciOiJIUzI1NiIsInR...<new-access-token>...",
             "token_type": "bearer"
         }
         ```
@@ -373,23 +420,28 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
         }
         ```
 
-    **Примітки:**
+    **Примітки**:
     - Новий **access_token** діє протягом часу, визначеного параметром `ACCESS_TOKEN_EXPIRE_MINUTES`.
     - Якщо refresh-токен недійсний або закінчився його термін дії, необхідно повторно пройти процес аутентифікації.
     - У разі виникнення проблем із оновленням токена зверніться до технічної підтримки.
     """
-
     try:
+        refresh_token = token_request.refresh_token
+
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=['HS256'])
         user_id = payload.get("user_id")
 
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
+
         user_result = await db.execute(select(models.Customer).filter(models.Customer.id == user_id))
         user = user_result.scalars().first()
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+        if not user.is_verified:
+            raise HTTPException(status_code=403, detail="User is not verified. Please contact support.")
 
         new_access_token = create_access_token(data={"user_id": user.id, "role_id": user.role_id},
                                                expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
@@ -400,3 +452,4 @@ async def refresh_token(refresh_token: str, db: AsyncSession = Depends(get_db)):
         }
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
+

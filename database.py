@@ -1,8 +1,9 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 
+from decouple import config
 
-URL_DATABASE = 'postgresql+asyncpg://postgres:2117@185.161.209.220:9039/fasttg_db'
+URL_DATABASE = config("DATABASE_URL_ASYNCH")
 
 engine = create_async_engine(URL_DATABASE, echo=True)
 

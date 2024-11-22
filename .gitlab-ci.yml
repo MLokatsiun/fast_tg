@@ -18,8 +18,8 @@ job_build:
   stage: build
   script:
     - echo "Building the project"
-    - rsync -av --delete --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
-    - rsync -av --exclude='.git' --exclude='venv' ./ $FAST_TG_BOT_SRC
+    - rsync -av --delete --exclude='.git' --exclude='venv' --exclude='.env' ./ $FAST_TG_BOT_SRC
+    - rsync -av --exclude='.git' --exclude='venv' --exclude='.env'  ./ $FAST_TG_BOT_SRC
     - echo "Install requirements"
     - cd $FAST_TG_BOT_SRC
     - source venv/bin/activate

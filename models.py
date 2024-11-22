@@ -1,7 +1,7 @@
 from database import Base
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Float, BigInteger
+from sqlalchemy import Column, Integer, Float, String
 from sqlalchemy.orm import relationship
-from geopy.geocoders import Nominatim
 
 
 class Locations(Base):
@@ -17,51 +17,37 @@ class Locations(Base):
 
     def __init__(self, latitude=None, longitude=None, address_name=None):
         """
-            Initializes a new location instance. Sets latitude and longitude based on provided arguments.
-
-            Args:
-                latitude (float, optional): Latitude of the location.
-                longitude (float, optional): Longitude of the location.
-                address_name (str, optional): The address name for the location. If provided,
-                                                the latitude and longitude are set using this address.
-
-            Raises:
-                 ValueError: If neither address_name nor both latitude and longitude are provided.
+        Ініціалізуємо об'єкт локації. Оновлення координат або адреси відбувається асинхронно.
         """
-        if address_name:
-            self.set_location_by_address(address_name)
+        self.latitude = latitude
+        self.longitude = longitude
+        self.address_name = address_name
+
+    async def update_location(self, address=None, latitude=None, longitude=None):
+        """
+        Асинхронне оновлення даних локації.
+        """
+        from business_logical import get_coordinates
+        if address:
+            coordinates = await get_coordinates(address=address)
+            self.latitude = coordinates["latitude"]
+            self.longitude = coordinates["longitude"]
+            self.address_name = address
         elif latitude is not None and longitude is not None:
+            address_data = await get_coordinates(lat=latitude, lng=longitude)
             self.latitude = latitude
             self.longitude = longitude
+            self.address_name = address_data["address"]
         else:
-            raise ValueError("Either address_name or both latitude and longitude must be provided.")
+            raise ValueError("Either address or both latitude and longitude must be provided.")
 
-    def set_location_by_address(self, address):
-        """
-            Sets the latitude and longitude of the location based on the provided address using Nominatim geocoding.
-
-            Args:
-                address (str): The address to geocode.
-
-            Raises:
-                ValueError: If the address cannot be found.
-        """
-        geolocator = Nominatim(user_agent="api/1.0 (misaloka29@gmail.com)")
-        location = geolocator.geocode(address)
-
-        if location:
-            self.latitude = location.latitude
-            self.longitude = location.longitude
-            self.address_name = address
-        else:
-            raise ValueError("Address could not be found.")
 
 
 class Customer(Base):
     __tablename__ = 'Customer'
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    phone_num = Column(String, unique=True)
+    phone_num = Column(String)
     tg_id = Column(String)
     firstname = Column(String)
     lastname = Column(String)
@@ -83,7 +69,7 @@ class Categories(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String)
-    active_duration = Column(String)
+    # active_duration = Column(String)
     parent_id = Column(Integer)
     is_active = Column(Boolean, default=True)
 

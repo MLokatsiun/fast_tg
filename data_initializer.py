@@ -5,6 +5,12 @@ from models import Client, Roles, Moderators
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+from decouple import config
+
+PASSWORD_380968101250 = config('PASSWORD_380968101250')
+PASSWORD_380123456789 = config("PASSWORD_380123456789")
+PASSWORD_TELEGRAM = config("PASSWORD_TELEGRAM")
+PASSWORD_FRONTEND = config("PASSWORD_FRONTEND")
 
 async def get_password_hash(password: str) -> str:
     """
@@ -25,8 +31,8 @@ async def initialize_data(db: AsyncSession):
                 db.add(Roles(name=role_name))
 
         clients = [
-            {"name": "telegram", "password": "1234"},
-            {"name": "frontend", "password": "4321"}
+            {"name": "telegram", "password": PASSWORD_TELEGRAM},
+            {"name": "frontend", "password": PASSWORD_FRONTEND}
         ]
         for client_data in clients:
             result = await db.execute(select(Client).filter(Client.name == client_data["name"]))
@@ -41,13 +47,13 @@ async def initialize_data(db: AsyncSession):
                 "phone_number": "380968101250",
                 "role_id": 3,
                 "client_id": 2,
-                "password": "Admin.22r1"
+                "password": PASSWORD_380968101250
             },
             {
                 "phone_number": "380123456789",
                 "role_id": 3,
                 "client_id": 1,
-                "password": "StrongPass123"
+                "password": PASSWORD_380123456789
             }
         ]
         for moderator_data in moderators:

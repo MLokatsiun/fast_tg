@@ -1,8 +1,10 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base
+from decouple import config
 
-DATABASE_URL = 'postgresql://postgres:1234@localhost:5432/testbot'
+DATABASE_URL = config("DATABASE_URL")
+
 engine = create_engine(DATABASE_URL)
 
 Base.metadata.create_all(engine)

@@ -106,6 +106,7 @@ async def create_application(
     """
     if not current_user.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+
     try:
         active_to_date = parse(application.active_to)
         if not active_to_date:
@@ -117,55 +118,77 @@ async def create_application(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date: {str(e)}")
 
-    if application.address:
-        coordinates = await get_coordinates(application.address)
-        latitude, longitude = coordinates["latitude"], coordinates["longitude"]
-    elif application.latitude and application.longitude:
-        latitude, longitude = application.latitude, application.longitude
-    else:
-        raise HTTPException(status_code=400, detail="Provide either address or both latitude and longitude.")
+    try:
+        if application.address:
+            coordinates = await get_coordinates(application.address)
+            latitude, longitude = coordinates["latitude"], coordinates["longitude"]
+            address = application.address
+        elif application.latitude and application.longitude:
+            latitude, longitude = application.latitude, application.longitude
+            reverse_geocode = await get_coordinates(lat=latitude, lng=longitude)
+            address = reverse_geocode.get("address")
+            if not address:
+                raise HTTPException(status_code=400, detail="Could not resolve address for the given coordinates.")
+        else:
+            raise HTTPException(status_code=400, detail="Provide either address or both latitude and longitude.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error in geocoding: {str(e)}")
 
-    result = await db.execute(
-        select(models.Locations).filter(
-            models.Locations.latitude == float(latitude),
-            models.Locations.longitude == float(longitude)
+    try:
+        query = select(models.Categories).filter(models.Categories.id == application.category_id)
+        category_result = await db.execute(query)
+        category = category_result.scalar_one_or_none()
+
+        if not category:
+            raise HTTPException(status_code=400, detail=f"Invalid category_id: {application.category_id}")
+
+        # Обробка локації
+        result = await db.execute(
+            select(models.Locations).filter(
+                models.Locations.latitude == float(latitude),
+                models.Locations.longitude == float(longitude),
+                models.Locations.address_name == address
+            )
         )
-    )
-    existing_location = result.scalar_one_or_none()
+        existing_location = result.scalar_one_or_none()
 
-    if existing_location:
-        location_id = existing_location.id
-    else:
-        new_location = models.Locations(latitude=latitude, longitude=longitude, address_name=application.address)
-        db.add(new_location)
+        if existing_location:
+            location_id = existing_location.id
+        else:
+            new_location = models.Locations(latitude=latitude, longitude=longitude, address_name=address)
+            db.add(new_location)
+            await db.commit()
+            await db.refresh(new_location)
+            location_id = new_location.id
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{str(e)}")
+
+    try:
+        new_application = models.Applications(
+            creator_id=current_user.id,
+            category_id=application.category_id,
+            location_id=location_id,
+            description=application.description,
+            is_in_progress=False,
+            is_done=False,
+            is_finished=False,
+            active_to=active_to_date.isoformat(),
+            date_at=datetime.utcnow().isoformat()
+        )
+
+        db.add(new_application)
         await db.commit()
-        await db.refresh(new_location)
-        location_id = new_location.id
+        await db.refresh(new_application)
 
-
-    new_application = models.Applications(
-        creator_id=current_user.id,
-        category_id=application.category_id,
-        location_id=location_id,
-        description=application.description,
-        is_in_progress=False,
-        is_done=False,
-        is_finished=False,
-        active_to=active_to_date.isoformat(),
-        date_at=datetime.utcnow().isoformat()
-    )
-
-    db.add(new_application)
-    await db.commit()
-    await db.refresh(new_application)
-
-    return {
-        "id": new_application.id,
-        "creator_id": current_user.id,
-        "location_id": new_application.location_id,
-        "description": new_application.description,
-        "active_to": active_to_date
-    }
+        return {
+            "id": new_application.id,
+            "creator_id": current_user.id,
+            "location_id": new_application.location_id,
+            "description": new_application.description,
+            "active_to": active_to_date
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error while creating application: {str(e)}")
 
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -357,51 +380,55 @@ async def get_applications(
 
     try:
         if type == 'available':
-            result = await db.execute(
-                select(models.Applications).filter(
-                    models.Applications.creator_id == current_user.id,
-                    models.Applications.is_done.is_(False),
-                    models.Applications.is_in_progress.is_(False),
-                    models.Applications.is_active.is_(True)
-                )
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.creator_id == current_user.id,
+                models.Applications.is_done.is_(False),
+                models.Applications.is_in_progress.is_(False),
+                models.Applications.is_active.is_(True)
             )
-            applications = result.scalars().all()
 
         elif type == 'in_progress':
-            result = await db.execute(
-                select(models.Applications).filter(
-                    models.Applications.creator_id == current_user.id,
-                    models.Applications.is_in_progress.is_(True),
-                    models.Applications.is_done.is_(False),
-                    models.Applications.is_active.is_(True)
-                )
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.creator_id == current_user.id,
+                models.Applications.is_in_progress.is_(True),
+                models.Applications.is_done.is_(False),
+                models.Applications.is_active.is_(True)
             )
-            applications = result.scalars().all()
 
         elif type == 'finished':
-            result = await db.execute(
-                select(models.Applications).filter(
-                    models.Applications.creator_id == current_user.id,
-                    models.Applications.is_done.is_(True),
-                    models.Applications.is_active.is_(True)
-                )
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.creator_id == current_user.id,
+                models.Applications.is_done.is_(True),
+                models.Applications.is_active.is_(True)
             )
-            applications = result.scalars().all()
 
         else:
             raise HTTPException(status_code=404, detail='Invalid applications type')
 
+        result = await db.execute(query)
+        applications = result.fetchall()
+
         response_data = [
             {
-                'id': application.id,
-                'description': application.description,
-                'category_id': application.category_id,
-                'location': application.location_id,
-                'executor_id': application.executor_id,
-                'is_in_progress': application.is_in_progress,
-                'is_done': application.is_done,
-                'date_at': application.date_at,
-                'active_to': application.active_to
+                'id': application.Applications.id,
+                'description': application.Applications.description,
+                'category_id': application.Applications.category_id,
+                'location': {
+                    'latitude': application.Locations.latitude,
+                    'longitude': application.Locations.longitude,
+                    'address_name': application.Locations.address_name
+                },
+                'executor_id': application.Applications.executor_id,
+                'is_in_progress': application.Applications.is_in_progress,
+                'is_done': application.Applications.is_done,
+                'date_at': application.Applications.date_at,
+                'active_to': application.Applications.active_to
             }
             for application in applications
         ]

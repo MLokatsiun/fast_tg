@@ -9,9 +9,10 @@ import httpx
 from passlib.context import CryptContext
 from database import get_db
 from models import Customer, Moderators
+from decouple import config
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = '884e824f5571d0acf70e2cc8600c2deb68dcc302c2402a1838ef2b38e9b22ade'
+SECRET_KEY = config("SECRET_KEY")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
@@ -33,7 +34,7 @@ def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(days=7
     return encoded_jwt
 
 
-async def get_current_user(token: str, db: AsyncSession = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         user_id = payload.get("user_id")
@@ -81,32 +82,57 @@ async def get_current_volonter(token: str = Depends(oauth2_scheme), db: AsyncSes
     return user
 
 
-async def get_coordinates(address: str):
-    base_url = "https://nominatim.openstreetmap.org/search"
-    params = {
-        "q": address,
-        "format": "json",
-        "limit": 1
-    }
-    headers = {
-        "User-Agent": "api/1.0 (misaloka29@gmail.com)"
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.get(base_url, params=params, headers=headers)
+async def get_coordinates(address: str = None, lat: float = None, lng: float = None):
+    """
+    Отримує координати або адресу, використовуючи Google Maps Geocoding API.
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Error connecting to Nominatim API")
+    :param address: Адреса, для якої потрібно отримати координати (якщо задано).
+    :param lat: Широта для зворотного геокодингу (якщо задано).
+    :param lng: Довгота для зворотного геокодингу (якщо задано).
+    :return: Словник з координатами або адресою.
+    """
+    GOOGLE_API_KEY = config("GOOGLE_API_KEY")
+    base_url = "https://maps.googleapis.com/maps/api/geocode/json"
+
+    if address:
+        params = {
+            "address": address,
+            "key": GOOGLE_API_KEY
+        }
+    elif lat is not None and lng is not None:
+        params = {
+            "latlng": f"{lat},{lng}",
+            "key": GOOGLE_API_KEY
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Either 'address' or both 'lat' and 'lng' must be provided")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(base_url, params=params)
+            response.raise_for_status()
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=503, detail=f"API request error: {exc}")
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail="Google Maps API error")
 
     data = response.json()
 
-    if not data:
-        raise HTTPException(status_code=400, detail="Address not found")
+    if data.get("status") != "OK":
+        error_message = data.get("error_message", "Address not found")
+        raise HTTPException(status_code=400, detail=f"Google Maps API error: {error_message}")
 
-    location = data[0]
-    return {
-        "latitude": location["lat"],
-        "longitude": location["lon"]
-    }
+    if address:
+        location = data["results"][0]["geometry"]["location"]
+        return {
+            "latitude": location["lat"],
+            "longitude": location["lng"]
+        }
+    elif lat is not None and lng is not None:
+        address = data["results"][0]["formatted_address"]
+        return {
+            "address": address
+        }
 
 
 def get_password_hash(password):

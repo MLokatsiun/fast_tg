@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from models import Client, Moderators, Categories, Applications, Customer
 from business_logical import get_current_user, create_access_token, create_refresh_token, SECRET_KEY
-from schemas import CategoryCreate, CategoryDelete, ApplicationDelete, VerificationResponse, VerificationUser, ModeratorLoginRequest
+from schemas import (CategoryCreate, CategoryDelete, ApplicationDelete, VerificationResponse, VerificationUser,
+                     ModeratorLoginRequest, RefreshTokenRequest)
 from database import get_db
 from datetime import timedelta
 import bcrypt
@@ -115,8 +117,9 @@ async def login_moderator(login_request: ModeratorLoginRequest, db: AsyncSession
         "token_type": "bearer"
     }
 
+
 @router.post("/refresh-token/", status_code=200)
-async def refresh_token_moderator(refresh_token: str, db: AsyncSession = Depends(get_db)):
+async def refresh_token_moderator(refresh_token_request: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
     """
     **Оновлення токена доступу для модератора.**
 
@@ -127,18 +130,16 @@ async def refresh_token_moderator(refresh_token: str, db: AsyncSession = Depends
       - **refresh_token**: Токен оновлення, виданий під час аутентифікації модератора:
         ```json
         {
-            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR..."
+            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR...<your-refresh-token>..."
         }
         ```
+      - **refresh_token** має бути дійсним і виданим для існуючого модератора.
 
-    - **Обмеження**:
-      - Токен оновлення має бути дійсним і виданим для існуючого модератора.
-
-    **Відповідь:**
+    **Відповідь**:
     - **200**: Успішне оновлення токена доступу. Повертається новий токен:
         ```json
         {
-            "access_token": "eyJhbGciOiJIUzI1NiIsInR...",
+            "access_token": "eyJhbGciOiJIUzI1NiIsInR...<new-access-token>...",
             "token_type": "bearer"
         }
         ```
@@ -161,14 +162,14 @@ async def refresh_token_moderator(refresh_token: str, db: AsyncSession = Depends
         }
         ```
 
-    **Примітки:**
+    **Примітки**:
     - Новий **access_token** діє протягом 15 хвилин.
     - Якщо refresh-токен недійсний або закінчився термін його дії, необхідно повторно пройти процес аутентифікації.
     - У разі виникнення проблем із оновленням токена зверніться до технічної підтримки.
     """
 
     try:
-        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(refresh_token_request.refresh_token, SECRET_KEY, algorithms=["HS256"])
         user_id = payload.get("user_id")
         role_id = payload.get("role_id")
 
@@ -177,12 +178,13 @@ async def refresh_token_moderator(refresh_token: str, db: AsyncSession = Depends
 
         moderator = await db.execute(select(Moderators).filter(Moderators.id == user_id))
         moderator = moderator.scalars().first()
+
         if not moderator or moderator.role_id != role_id:
             raise HTTPException(status_code=404, detail="Moderator not found")
 
         expires_delta = timedelta(minutes=15)
-
-        new_access_token = create_access_token(data={"user_id": moderator.id, "role_id": moderator.role_id}, expires_delta=expires_delta)
+        new_access_token = create_access_token(data={"user_id": moderator.id, "role_id": moderator.role_id},
+                                               expires_delta=expires_delta)
 
         return {
             "access_token": new_access_token,
@@ -192,23 +194,101 @@ async def refresh_token_moderator(refresh_token: str, db: AsyncSession = Depends
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+
 @router.post("/categories/", status_code=201)
 async def create_category(category: CategoryCreate, db: AsyncSession = Depends(get_db), current_moderator=Depends(get_current_user)):
-    new_category = Categories(
-        name=category.name,
-        parent_id=category.parent_id,
-        active_duration=category.active_duration
-    )
-    db.add(new_category)
-    await db.commit()
-    await db.refresh(new_category)
+    """
+    **Створення нової категорії або активація неактивної.**
 
-    return {
-        "id": new_category.id,
-        "name": new_category.name,
-        "active_duration": new_category.active_duration,
-        "parent_id": new_category.parent_id
-    }
+    - **Ендпоінт**: POST `/categories/`
+    - **Опис**: Дозволяє створити нову категорію або активувати вже існуючу неактивну категорію.
+    - **Вхідні параметри**:
+      - **category**: Дані для створення або активації категорії:
+        ```json
+        {
+            "name": "Назва категорії",
+            "parent_id": 1
+        }
+        ```
+        - **name**: Назва категорії (обов'язково).
+        - **parent_id**: Ідентифікатор батьківської категорії (необов'язково).
+
+    - **Обмеження**:
+      - Якщо категорія з таким ім'ям вже існує і активна, вона не буде створена повторно.
+      - Якщо категорія з таким ім'ям існує, але неактивна, вона буде активована.
+
+    **Відповідь:**
+    - **201**: Успішне створення нової категорії або реактивація неактивної категорії. Повертається інформація про категорію:
+        ```json
+        {
+            "id": 1,
+            "name": "Назва категорії",
+            "parent_id": 1
+        }
+        ```
+    - **400**: Помилка вхідних даних. Наприклад, категорія з таким ім'ям уже існує і є активною:
+        ```json
+        {
+            "detail": "Category 'Назва категорії' already exists and is active."
+        }
+        ```
+    - **500**: Помилка сервера або бази даних:
+        ```json
+        {
+            "detail": "Error: ..."
+        }
+        ```
+
+    **Примітки:**
+    - Якщо категорія вже існує, але неактивна, вона буде активована та оновлений її `parent_id`.
+    - Після створення нової категорії вона матиме статус активної.
+    """
+    try:
+        existing_category_result = await db.execute(
+            select(Categories).filter(Categories.name == category.name)
+        )
+        existing_category = existing_category_result.scalars().first()
+
+        if existing_category:
+            if existing_category.is_active:
+                return {
+                    "detail": f"Category '{category.name}' already exists and is active.",
+                    "id": existing_category.id,
+                    "name": existing_category.name,
+                    "parent_id": existing_category.parent_id
+                }
+            else:
+                existing_category.is_active = True
+                existing_category.parent_id = category.parent_id
+                await db.commit()
+                await db.refresh(existing_category)
+                return {
+                    "id": existing_category.id,
+                    "name": existing_category.name,
+                    "parent_id": existing_category.parent_id,
+                    "status": "Category reactivated"
+                }
+
+        new_category = Categories(
+            name=category.name,
+            parent_id=category.parent_id
+        )
+        db.add(new_category)
+        await db.commit()
+        await db.refresh(new_category)
+
+        return {
+            "id": new_category.id,
+            "name": new_category.name,
+            "parent_id": new_category.parent_id
+        }
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 @router.delete("/categories/", status_code=204)
 async def deactivate_category(category_delete: CategoryDelete, db: AsyncSession = Depends(get_db), current_moderator=Depends(get_current_user)):
@@ -312,7 +392,7 @@ async def delete_application(application_delete: ApplicationDelete, db: AsyncSes
     return {"detail": "Application deleted successfully"}
 
 @router.post("/verify_user/", response_model=VerificationResponse)
-async def verify_user(verification_user: VerificationUser, db: AsyncSession = Depends(get_db)):
+async def verify_user(verification_user: VerificationUser, db: AsyncSession = Depends(get_db), current_moderator=Depends(get_current_user)):
     """
     **Перевірка користувача.**
 

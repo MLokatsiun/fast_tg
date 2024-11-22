@@ -88,21 +88,30 @@ async def edit_customer(
         customer = volunteer
 
         if customer_info.location is not None:
-            if customer_info.location.latitude is None or customer_info.location.longitude is None:
-                if customer_info.location.address:
-                    coordinates = await get_coordinates(customer_info.location.address)
-                    latitude = float(coordinates["latitude"])
-                    longitude = float(coordinates["longitude"])
-                else:
-                    raise HTTPException(status_code=400, detail="Provide either coordinates or an address.")
-            else:
+            if customer_info.location.latitude is not None and customer_info.location.longitude is not None:
                 latitude = float(customer_info.location.latitude)
                 longitude = float(customer_info.location.longitude)
+
+                if not customer_info.location.address:
+                    reverse_geocode = await get_coordinates(lat=latitude, lng=longitude)
+                    address = reverse_geocode.get("address")
+                    if not address:
+                        raise HTTPException(status_code=400,
+                                            detail="Could not resolve address for the given coordinates.")
+                else:
+                    address = customer_info.location.address
+            elif customer_info.location.address:
+                coordinates = await get_coordinates(address=customer_info.location.address)
+                latitude = float(coordinates["latitude"])
+                longitude = float(coordinates["longitude"])
+                address = customer_info.location.address
+            else:
+                raise HTTPException(status_code=400, detail="Provide either coordinates or an address.")
 
             query = select(models.Locations).filter(
                 models.Locations.latitude == latitude,
                 models.Locations.longitude == longitude,
-                models.Locations.address_name == customer_info.location.address
+                models.Locations.address_name == address
             )
             location_result = await db.execute(query)
             location = location_result.scalars().first()
@@ -111,7 +120,7 @@ async def edit_customer(
                 location = models.Locations(
                     latitude=latitude,
                     longitude=longitude,
-                    address_name=customer_info.location.address
+                    address_name=address
                 )
                 db.add(location)
                 await db.commit()
@@ -120,6 +129,19 @@ async def edit_customer(
             customer.location_id = location.id
 
         if customer_info.categories is not None:
+            query = select(models.Categories).filter(
+                models.Categories.id.in_(customer_info.categories)
+            )
+            existing_categories_result = await db.execute(query)
+            existing_categories = {cat.id for cat in existing_categories_result.scalars().all()}
+
+            invalid_categories = set(customer_info.categories) - existing_categories
+            if invalid_categories:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid category IDs: {', '.join(map(str, invalid_categories))}"
+                )
+
             query = select(models.Ink_CustomerCategories).filter(
                 models.Ink_CustomerCategories.customer_id == customer.id
             )
@@ -618,16 +640,19 @@ async def get_applications(
         if type == 'available':
             query = select(models.Applications).where(
                 models.Applications.is_done == False,
-                models.Applications.is_in_progress == False
+                models.Applications.is_in_progress == False,
+                models.Applications.is_active.is_(True)
             )
         elif type == 'in_progress':
             query = select(models.Applications).where(
                 models.Applications.is_in_progress == True,
-                models.Applications.is_done == False
+                models.Applications.is_done == False,
+                models.Applications.is_active.is_(True)
             )
         elif type == 'finished':
             query = select(models.Applications).where(
-                models.Applications.is_done == True
+                models.Applications.is_done == True,
+                models.Applications.is_active.is_(True)
             )
         else:
             raise HTTPException(status_code=404, detail='Invalid application type')

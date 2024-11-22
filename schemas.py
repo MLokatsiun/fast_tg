@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class LoginRequest(BaseModel):
-    tg_id: constr(min_length=9, max_length=10)
+    tg_id: constr(pattern=r"^\d{9,10}$")
     role_id: int
     client: str
     password: str
@@ -14,10 +14,16 @@ class LocationCreate(BaseModel):
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+class ForDevelopers(BaseModel):
+    client: str
+    password: str
 
 class CreateCustomerBase(BaseModel):
-    phone_num: constr(min_length=12, max_length=12)
-    tg_id: constr(min_length=9, max_length=10)
+    phone_num: constr(pattern=r"^\d{12}$")
+    tg_id: constr(pattern=r"^\d{9,10}$")
     firstname: str
     lastname: Optional[str] = None
     patronymic: Optional[str] = None
@@ -46,7 +52,6 @@ from typing import List
 class ApplicationCategory(BaseModel):
     id: int
     name: str
-    active_duration: int
 
 class ApplicationLocation(BaseModel):
     id: int
@@ -67,7 +72,6 @@ class ApplicationsList(BaseModel):
 class CategoryCreate(BaseModel):
     name: str
     parent_id: Optional[int] = None
-    active_duration: Optional[int] = None
 
 class CategoryDelete(BaseModel):
     id: int
@@ -82,7 +86,7 @@ class AcceptApplicationBase(BaseModel):
 
 class FileData(BaseModel):
     filename: str
-    filedata: str  # Строка с base64-кодированными данными
+    filedata: str
 
 class CloseApplicationRequest(BaseModel):
     application_id: int
@@ -107,7 +111,7 @@ class VerificationResponse(BaseModel):
     message: str
 
 class ModeratorLoginRequest(BaseModel):
-    phone_number: str
+    phone_number: constr(pattern=r"^\d{12}$")
     password: str
     client: str
     client_password: str

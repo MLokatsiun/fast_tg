@@ -302,7 +302,9 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
     - Якщо виникли проблеми з доступом, зверніться до технічної підтримки.
     """
 
-    client_result = await db.execute(select(models.Client).filter(models.Client.name == login_request.client))
+    client_result = await db.execute(
+        select(models.Client).filter(models.Client.name == login_request.client)
+    )
     client_entry = client_result.scalars().first()
     if not client_entry:
         raise HTTPException(status_code=400, detail="Invalid client type")
@@ -310,29 +312,31 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
     if not pwd_context.verify(login_request.password, client_entry.password):
         raise HTTPException(status_code=400, detail="Incorrect password for client")
 
-
-
-    user_result = await db.execute(select(models.Customer).filter(
-        models.Customer.tg_id == login_request.tg_id,
-        models.Customer.role_id == login_request.role_id
-    ))
+    # Пошук активного користувача
+    user_result = await db.execute(
+        select(models.Customer).filter(
+            models.Customer.tg_id == login_request.tg_id,
+            models.Customer.role_id == login_request.role_id,
+            models.Customer.is_active == True  # Фільтруємо тільки активні профілі
+        )
+    )
     user = user_result.scalars().first()
 
     if not user:
-        raise HTTPException(status_code=400, detail="User not found with provided TG ID and role ID")
+        raise HTTPException(
+            status_code=400,
+            detail="Active user not found with provided TG ID and role ID"
+        )
 
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="User profile is not active. Please contact support.")
-
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="User is not verified. Please contact support.")
-
+    # Створення токенів
     token_data = {
         "user_id": user.id,
         "role_id": user.role_id,
         "client": login_request.client
     }
-    access_token = create_access_token(data=token_data, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    access_token = create_access_token(
+        data=token_data, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     refresh_token = create_refresh_token(data=token_data)
 
     return {
@@ -340,7 +344,6 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
         "refresh_token": refresh_token,
         "token_type": "bearer"
     }
-
 
 @router.post("/refresh/")
 async def refresh_token(

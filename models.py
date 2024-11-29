@@ -7,7 +7,7 @@ from sqlalchemy.orm import relationship
 class Locations(Base):
     __tablename__ = 'Locations'
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     latitude = Column(Float)
     longitude = Column(Float)
     address_name = Column(String)
@@ -67,7 +67,7 @@ class Customer(Base):
 class Categories(Base):
     __tablename__ = 'Categories'
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String)
     # active_duration = Column(String)
     parent_id = Column(Integer)
@@ -80,7 +80,7 @@ class Categories(Base):
 class Applications(Base):
     __tablename__ = 'Applications'
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     creator_id = Column(Integer, ForeignKey('Customer.id'))
     category_id = Column(Integer, ForeignKey('Categories.id'))
     location_id = Column(Integer, ForeignKey('Locations.id'))
@@ -102,7 +102,7 @@ class Applications(Base):
 class Roles(Base):
     __tablename__ = 'Roles'
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     name = Column(String, unique=True, index=True)
 
     customers = relationship('Customer', secondary='Ink_CustomerRole', back_populates='roles')
@@ -111,7 +111,7 @@ class Roles(Base):
 class Ink_CustomerRole(Base):
     __tablename__ = 'Ink_CustomerRole'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     customer_id = Column(Integer, ForeignKey('Customer.id'))
     role_id = Column(Integer, ForeignKey('Roles.id'))
 
@@ -119,7 +119,7 @@ class Ink_CustomerRole(Base):
 class Media(Base):
     __tablename__ = 'Media'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     filepath = Column(String)
     creator_id = Column(Integer, ForeignKey('Customer.id'))
 
@@ -129,7 +129,7 @@ class Media(Base):
 class Ink_ApplicationsMedia(Base):
     __tablename__ = 'Ink_ApplicationsMedia'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     application_id = Column(Integer, ForeignKey('Applications.id'))
     media_id = Column(Integer, ForeignKey('Media.id'))
 
@@ -140,7 +140,7 @@ class Ink_ApplicationsMedia(Base):
 class Ink_CustomerCategories(Base):
     __tablename__ = 'Ink_CustomerCategories'
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     customer_id = Column(Integer, ForeignKey('Customer.id'))
     category_id = Column(Integer, ForeignKey('Categories.id'))
 

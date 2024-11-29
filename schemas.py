@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class LoginRequest(BaseModel):
-    tg_id: constr(pattern=r"^\d{9,10}$")
+    tg_id: constr(pattern=r"^\d{7,10}$")
     role_id: int
     client: str
     password: str
@@ -23,7 +23,7 @@ class ForDevelopers(BaseModel):
 
 class CreateCustomerBase(BaseModel):
     phone_num: constr(pattern=r"^\d{12}$")
-    tg_id: constr(pattern=r"^\d{9,10}$")
+    tg_id: constr(pattern=r"^\d{7,10}$")
     firstname: str
     lastname: Optional[str] = None
     patronymic: Optional[str] = None

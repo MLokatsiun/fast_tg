@@ -103,9 +103,8 @@ async def register_user(
     - Після створення новий користувач буде не перевіреним (`is_verified: false`).
     - Система дозволяє оновлювати профілі неактивних користувачів, якщо їх перевірка раніше була відхилена.
     """
-
     try:
-        # Перевірка існування ролі
+
         role_check_result = await db.execute(
             select(models.Roles).filter(models.Roles.id == user_info.role_id)
         )
@@ -116,66 +115,34 @@ async def register_user(
                 detail=f"Invalid role_id: {user_info.role_id}. Role does not exist in the Roles table."
             )
 
-        # Перевірка унікальності TG ID для ролі
         tg_id_check_result = await db.execute(
             select(models.Customer).filter(
                 models.Customer.tg_id == user_info.tg_id,
-                models.Customer.role_id == user_info.role_id
+                models.Customer.role_id == user_info.role_id,
+                models.Customer.is_active == True
             )
         )
         existing_user_with_tg_id = tg_id_check_result.scalars().first()
         if existing_user_with_tg_id:
             raise HTTPException(
                 status_code=400,
-                detail=f"User with TG ID {user_info.tg_id} already exists for role ID {user_info.role_id}."
+                detail=f"User with TG ID {user_info.tg_id} already exists for role ID {user_info.role_id} and is active."
             )
 
-        # Перевірка існування користувача за номером телефону та TG ID
-        result = await db.execute(
+        phone_check_result = await db.execute(
             select(models.Customer).filter(
                 models.Customer.phone_num == user_info.phone_num,
-                models.Customer.tg_id == user_info.tg_id
+                models.Customer.role_id == user_info.role_id,
+                models.Customer.is_active == True
             )
         )
-        existing_user = result.scalars().first()
-        if existing_user:
-            if existing_user.is_active:
-                raise HTTPException(
-                    status_code=400,
-                    detail="User with this phone number and TG ID already exists and is active."
-                )
-            else:
-                # Оновлення неактивного користувача
-                existing_user.firstname = user_info.firstname
-                existing_user.lastname = user_info.lastname
-                existing_user.patronymic = user_info.patronymic
-                existing_user.role_id = user_info.role_id
+        existing_user_with_phone = phone_check_result.scalars().first()
+        if existing_user_with_phone:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User with phone number {user_info.phone_num} already exists for role ID {user_info.role_id} and is active."
+            )
 
-                client_result = await db.execute(
-                    select(models.Client).filter(models.Client.name == user_info.client)
-                )
-                client_entry = client_result.scalars().first()
-                if not client_entry:
-                    raise HTTPException(status_code=400, detail="Invalid client.")
-                existing_user.client_id = client_entry.id
-
-                existing_user.location_id = None
-                existing_user.is_active = True
-                existing_user.is_verified = False
-                await db.commit()
-                await db.refresh(existing_user)
-                return {
-                    "id": existing_user.id,
-                    "phone_num": existing_user.phone_num,
-                    "tg_id": existing_user.tg_id,
-                    "firstname": existing_user.firstname,
-                    "lastname": existing_user.lastname,
-                    "role_id": existing_user.role_id,
-                    "is_active": existing_user.is_active,
-                    "is_verified": existing_user.is_verified
-                }
-
-        # Перевірка існування клієнта
         client_result = await db.execute(
             select(models.Client).filter(models.Client.name == user_info.client)
         )
@@ -183,7 +150,6 @@ async def register_user(
         if not client_entry:
             raise HTTPException(status_code=400, detail="Invalid client.")
 
-        # Робота з локацією
         location_id = None
         if user_info.role_id == 2:
             if not user_info.location:
@@ -227,7 +193,6 @@ async def register_user(
             if user_info.location:
                 raise HTTPException(status_code=400, detail="Location data is not required for beneficiaries.")
 
-        # Створення нового користувача
         new_user = models.Customer(
             phone_num=user_info.phone_num,
             tg_id=user_info.tg_id,
@@ -237,6 +202,7 @@ async def register_user(
             role_id=user_info.role_id,
             client_id=client_entry.id,
             location_id=location_id,
+            is_active=True,
             is_verified=False
         )
 
@@ -260,6 +226,7 @@ async def register_user(
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 
 @router.post("/login/", status_code=200)

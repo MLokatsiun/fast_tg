@@ -327,14 +327,14 @@ async def delete_application(
 
 @router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
-        type: Optional[str] = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
+        type: Optional[str] = Query(..., description="Тип заявок: 'accessible', 'is_progressing', 'complete'"),
         db: AsyncSession = Depends(get_db),
         current_user: models.Customer = Depends(get_current_beneficiary)
 ):
     """
     **Отримати список заявок за типом.**
 
-    - **type**: Тип заявок (обов'язково): 'available', 'in_progress', 'finished'.
+    - **type**: Тип заявок (обов'язково): 'accessible', 'is_progressing', 'complete'.
         - `available`: Заявки, які доступні для виконання.
         - `in_progress`: Заявки, що знаходяться в процесі виконання.
         - `finished`: Завершені заявки.
@@ -379,7 +379,7 @@ async def get_applications(
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
-        if type == 'available':
+        if type == 'accessible':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).filter(
@@ -389,7 +389,7 @@ async def get_applications(
                 models.Applications.is_active.is_(True)
             )
 
-        elif type == 'in_progress':
+        elif type == 'is_progressing':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).filter(
@@ -399,7 +399,7 @@ async def get_applications(
                 models.Applications.is_active.is_(True)
             )
 
-        elif type == 'finished':
+        elif type == 'complete':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).filter(

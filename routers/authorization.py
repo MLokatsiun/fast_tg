@@ -323,12 +323,14 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
     user = user_result.scalars().first()
 
     if not user:
-        raise HTTPException(
-            status_code=400,
-            detail="Active user not found with provided TG ID and role ID"
-        )
+        raise HTTPException(status_code=400, detail="User not found with provided TG ID and role ID")
 
-    # Створення токенів
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User profile is not active. Please contact support.")
+
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="User is not verified. Please contact support.")
+
     token_data = {
         "user_id": user.id,
         "role_id": user.role_id,

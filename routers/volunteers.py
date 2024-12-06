@@ -260,93 +260,21 @@ async def accept_application(
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
-    """
-    **Прийняти заявку, призначивши її виконання поточному волонтеру.**
-
-    Цей ендпоінт дозволяє волонтеру прийняти заявку і призначити її виконання на себе.
-    Після цього заявка отримає статус "в процесі" і буде асоційована з волонтером.
-    Однак, волонтер може мати лише три заявки в процесі виконання одночасно.
-
-    **Аргументи:**
-    - **app_id**: Дані заявки для прийняття. Містить `application_id`, що є ідентифікатором заявки.
-    - **db**: Сесія бази даних для виконання запиту.
-    - **current_volunteer**: Поточний авторизований волонтер.
-
-    **Винятки:**
-    - **403**: Якщо користувач не підтверджений.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "Access denied. User not verified by moderator"
-        }
-        ```
-    - **404**: Якщо волонтер або заявка не знайдені.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "Volunteer not found."
-        }
-        ```
-      або
-      ```json
-        {
-            "detail": "Application with ID <application_id> not found"
-        }
-        ```
-    - **400**: Якщо волонтер вже має три заявки в процесі.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "Volunteer already has 3 applications in progress."
-        }
-        ```
-    - **500**: Помилка сервера.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "An error occurred: <error_message>"
-        }
-        ```
-
-    **Повертає:**
-    - **200**: Якщо заявка успішно прийнята і оновлена.
-      - Повертається об'єкт з інформацією про заявку:
-        ```json
-        {
-            "id": <application_id>,
-            "category_id": <category_id>,
-            "location_id": <location_id>,
-            "executor_id": <executor_id>,
-            "description": <description>,
-            "is_in_progress": <is_in_progress>,
-            "is_done": <is_done>,
-            "date_at": <date_at>,
-            "active_to": <active_to>
-        }
-        ```
-
-    **Примітка:**
-    - Тільки підтверджені волонтери можуть приймати заявки.
-    - Заявка отримає статус `is_in_progress: True`, коли вона буде прийнята волонтером.
-    - Волонтер може мати не більше трьох заявок в процесі виконання одночасно.
-    """
     if not current_volunteer.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
-        # Перевірка, скільки заявок волонтер має в процесі виконання
         in_progress_query = await db.execute(
             select(models.Applications).where(
                 models.Applications.executor_id == current_volunteer.id,
                 models.Applications.is_in_progress.is_(True)
             )
         )
-        in_progress_count = in_progress_query.rowcount  # Кількість заявок в процесі
+        in_progress_count = len(in_progress_query.scalars().all())
 
         if in_progress_count >= 3:
             raise HTTPException(status_code=400, detail="Volunteer already has 3 applications in progress.")
 
-        # Знайти заявку, яку потрібно прийняти
         application_query = await db.execute(
             select(models.Applications).where(models.Applications.id == app_id.application_id)
         )
@@ -355,7 +283,6 @@ async def accept_application(
         if not application:
             raise HTTPException(status_code=404, detail=f"Application with ID {app_id.application_id} not found")
 
-        # Оновити статус заявки
         application.is_in_progress = True
         application.executor_id = current_volunteer.id
 
@@ -662,14 +589,14 @@ async def get_applications(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_in_progress.is_(False),
                 models.Applications.is_active.is_(True),
-                models.Applications.category_id == category  # Фільтрація за категорією
+                models.Applications.category_id == category
             )
         elif type == 'in_progress':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).filter(
                 models.Applications.is_in_progress.is_(True),
-                models.Applications.executor_id == current_volunteer.id,  # Фільтр по волонтеру
+                models.Applications.executor_id == current_volunteer.id,
                 models.Applications.is_done.is_(False),
                 models.Applications.is_active.is_(True)
             )

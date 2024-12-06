@@ -1,6 +1,6 @@
 from business_logical import (get_current_volonter, get_coordinates)
 import models
-from schemas import EditCustomerBase, AcceptApplicationBase
+from schemas import EditCustomerBase, AcceptApplicationBase, ApplicationsList
 from typing import Optional
 import aiofiles
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form, Query
@@ -265,6 +265,7 @@ async def accept_application(
 
     Цей ендпоінт дозволяє волонтеру прийняти заявку і призначити її виконання на себе.
     Після цього заявка отримає статус "в процесі" і буде асоційована з волонтером.
+    Однак, волонтер може мати лише три заявки в процесі виконання одночасно.
 
     **Аргументи:**
     - **app_id**: Дані заявки для прийняття. Містить `application_id`, що є ідентифікатором заявки.
@@ -288,10 +289,17 @@ async def accept_application(
         ```
       або
       ```json
-      {
-          "detail": "Application with ID <application_id> not found"
-      }
-      ```
+        {
+            "detail": "Application with ID <application_id> not found"
+        }
+        ```
+    - **400**: Якщо волонтер вже має три заявки в процесі.
+      - Повертається повідомлення:
+        ```json
+        {
+            "detail": "Volunteer already has 3 applications in progress."
+        }
+        ```
     - **500**: Помилка сервера.
       - Повертається повідомлення:
         ```json
@@ -320,27 +328,36 @@ async def accept_application(
     **Примітка:**
     - Тільки підтверджені волонтери можуть приймати заявки.
     - Заявка отримає статус `is_in_progress: True`, коли вона буде прийнята волонтером.
+    - Волонтер може мати не більше трьох заявок в процесі виконання одночасно.
     """
     if not current_volunteer.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
-        customer_query = await db.execute(
-            select(models.Customer).where(models.Customer.tg_id == current_volunteer.tg_id))
-        customer = customer_query.scalars().first()
+        # Перевірка, скільки заявок волонтер має в процесі виконання
+        in_progress_query = await db.execute(
+            select(models.Applications).where(
+                models.Applications.executor_id == current_volunteer.id,
+                models.Applications.is_in_progress.is_(True)
+            )
+        )
+        in_progress_count = in_progress_query.rowcount  # Кількість заявок в процесі
 
-        if not customer:
-            raise HTTPException(status_code=404, detail="Volunteer not found.")
+        if in_progress_count >= 3:
+            raise HTTPException(status_code=400, detail="Volunteer already has 3 applications in progress.")
 
+        # Знайти заявку, яку потрібно прийняти
         application_query = await db.execute(
-            select(models.Applications).where(models.Applications.id == app_id.application_id))
+            select(models.Applications).where(models.Applications.id == app_id.application_id)
+        )
         application = application_query.scalars().first()
 
         if not application:
             raise HTTPException(status_code=404, detail=f"Application with ID {app_id.application_id} not found")
 
+        # Оновити статус заявки
         application.is_in_progress = True
-        application.executor_id = customer.id
+        application.executor_id = current_volunteer.id
 
         await db.commit()
 
@@ -359,6 +376,7 @@ async def accept_application(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
 
 
 @router.post('/applications/close/', status_code=200)
@@ -568,114 +586,120 @@ async def cancel_application(
         raise HTTPException(status_code=400, detail=f'Error: {e}')
 
 
-@router.get('/applications/')
+@router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
-        type: Optional[str] = Query(...),
+        type: Optional[str] = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
     """
-    **Отримати заявки на основі їхнього статусу.**
+    **Отримати список заявок за типом.**
 
-    Цей ендпоінт дозволяє волонтеру отримати список заявок на основі вказаного статусу заявки. Заявки можуть бути доступними, у процесі виконання або завершеними.
+    - **type**: Тип заявок (обов'язково): 'available', 'in_progress', 'finished'.
+        - `available`: Заявки, які доступні для виконання.
+        - `in_progress`: Заявки, що знаходяться в процесі виконання (тільки для поточного волонтера).
+        - `finished`: Завершені заявки.
+    - **db**: Сесія бази даних для виконання запиту.
+    - **current_volunteer**: Волонтер, який наразі аутентифікований в системі.
 
-    **Аргументи:**
-    - **type**: Тип заявки, який може бути одним із наступних:
-        - `'available'`: Заявки, які ще не виконуються та не завершені.
-        - `'in_progress'`: Заявки, які знаходяться в процесі виконання.
-        - `'finished'`: Завершені заявки.
-    - **db**: Залежність для асинхронного підключення до бази даних.
-    - **current_volunteer**: Поточний авторизований волонтер.
+    **Відповідь:**
+    - **200**: Список заявок, що відповідають вказаному типу. Повертається список об'єктів заявок.
+    - **403**: Доступ заборонено для не верифікованих користувачів.
+    - **404**: Некоректний тип заявок.
+        - Повертається повідомлення:
+          ```json
+          {
+              "detail": "Invalid application type"
+          }
+          ```
 
-    **Винятки:**
-    - **403**: Якщо волонтер не є авторизованим або не має доступу.
-      - Повертається повідомлення:
-        ```json
+    **Формат відповіді:**
+    - **200**: Список заявок для запитуваного типу. Кожен елемент списку містить такі поля:
+      ```json
+      [
         {
-            "detail": "Access denied. User not verified by moderator"
-        }
-        ```
-    - **404**: Якщо тип заявки вказаний некоректно.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "Invalid application type"
-        }
-        ```
-    - **500**: Якщо сталася помилка під час виконання запиту до бази даних.
-      - Повертається повідомлення:
-        ```json
-        {
-            "detail": "Error: <error_message>"
-        }
-        ```
-
-    **Повертає:**
-    - **200**: Успішний запит із деталями заявок.
-      - Повертається масив об'єктів заявок:
-        ```json
-        [
-            {
-                "id": <application_id>,
-                "description": <description>,
-                "category_id": <category_id>,
-                "location_id": <location_id>,
-                "executor_id": <executor_id>,
-                "is_in_progress": <true/false>,
-                "is_done": <true/false>,
-                "date_at": <date_at>,
-                "active_to": <active_to>
+            "id": 1,
+            "description": "Опис заявки",
+            "category_id": 2,
+            "location": {
+                "latitude": 48.858844,
+                "longitude": 2.294351,
+                "address_name": "Ейфелева вежа, Париж"
             },
-            ...
-        ]
-        ```
+            "executor_id": 4,
+            "is_in_progress": false,
+            "is_done": false,
+            "date_at": "2024-11-16T10:00:00",
+            "active_to": "2024-11-20T10:00:00"
+        },
+        ...
+      ]
+      ```
 
     **Примітка:**
-    - Всі заявки фільтруються за типом: доступні, в процесі виконання або завершені.
+    - У разі помилки запиту або некоректного значення типу заявки повертається відповідь з помилкою.
+    - Для отримання списку заявок необхідно вказати правильний тип: 'available', 'in_progress' або 'finished'.
     """
     if not current_volunteer.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
         if type == 'available':
-            query = select(models.Applications).where(
-                models.Applications.is_done == False,
-                models.Applications.is_in_progress == False,
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.is_done.is_(False),
+                models.Applications.is_in_progress.is_(False),
                 models.Applications.is_active.is_(True)
             )
         elif type == 'in_progress':
-            query = select(models.Applications).where(
-                models.Applications.is_in_progress == True,
-                models.Applications.is_done == False,
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.is_in_progress.is_(True),
+                models.Applications.executor_id == current_volunteer.id,  # Фільтр по волонтеру
+                models.Applications.is_done.is_(False),
                 models.Applications.is_active.is_(True)
             )
         elif type == 'finished':
-            query = select(models.Applications).where(
-                models.Applications.is_done == True,
+            query = select(models.Applications, models.Locations).join(
+                models.Locations, models.Applications.location_id == models.Locations.id
+            ).filter(
+                models.Applications.is_done.is_(True),
+                models.Applications.executor_id == current_volunteer.id,
                 models.Applications.is_active.is_(True)
             )
         else:
-            raise HTTPException(status_code=404, detail='Invalid application type')
+            raise HTTPException(status_code=404, detail="Invalid application type")
 
         result = await db.execute(query)
-        applications = result.scalars().all()
+        applications = result.fetchall()
 
-        response_data = [{
-            'id': application.id,
-            'description': application.description,
-            'category_id': application.category_id,
-            'location_id': application.location_id,
-            'executor_id': application.executor_id,
-            'is_in_progress': application.is_in_progress,
-            'is_done': application.is_done,
-            'date_at': application.date_at,
-            'active_to': application.active_to,
-        } for application in applications]
+        response_data = [
+            {
+                "id": application.Applications.id,
+                "description": application.Applications.description,
+                "category_id": application.Applications.category_id,
+                "location": {
+                    "latitude": application.Locations.latitude,
+                    "longitude": application.Locations.longitude,
+                    "address_name": application.Locations.address_name
+                },
+                "executor_id": application.Applications.executor_id,
+                "is_in_progress": application.Applications.is_in_progress,
+                "is_done": application.Applications.is_done,
+                "date_at": application.Applications.date_at,
+                "active_to": application.Applications.active_to
+            }
+            for application in applications
+        ]
 
         return JSONResponse(content=response_data, status_code=200)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f'Error: {e}')
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 
 
 from sqlalchemy import func

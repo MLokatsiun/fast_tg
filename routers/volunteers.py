@@ -644,13 +644,25 @@ async def get_applications(
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
+        # Отримуємо категорію волонтера через Ink_CustomerCategories
+        category_query = await db.execute(
+            select(models.Ink_CustomerCategories.category_id).where(
+                models.Ink_CustomerCategories.customer_id == current_volunteer.id
+            )
+        )
+        category = category_query.scalars().first()
+
+        if not category:
+            raise HTTPException(status_code=404, detail="Category for volunteer not found.")
+
         if type == 'available':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).filter(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_in_progress.is_(False),
-                models.Applications.is_active.is_(True)
+                models.Applications.is_active.is_(True),
+                models.Applications.category_id == category  # Фільтрація за категорією
             )
         elif type == 'in_progress':
             query = select(models.Applications, models.Locations).join(
@@ -698,8 +710,6 @@ async def get_applications(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
-
 
 
 from sqlalchemy import func

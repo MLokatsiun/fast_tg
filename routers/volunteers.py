@@ -197,25 +197,27 @@ async def delete_profile(
     """
         **Деактивувати профіль поточного волонтера.**
 
-        Цей ендпоінт дозволяє деактивувати профіль волонтера. Після деактивації волонтер не зможе більше користуватися своїм профілем.
+        Цей ендпоінт дозволяє деактивувати профіль волонтера, якщо:
+        - Роль ID = 2
+        - Профіль активний (is_active = True)
 
         **Аргументи:**
         - **db**: Сесія бази даних для виконання запиту.
         - **current_volunteer**: Поточний авторизований волонтер.
 
         **Винятки:**
-        - **403**: Якщо користувач не підтверджений.
+        - **403**: Якщо користувач не підтверджений або не має ролі ID = 2.
           - Повертається повідомлення:
             ```json
             {
-                "detail": "Access denied. User not verified by moderator"
+                "detail": "Access denied. User is not authorized to perform this action"
             }
             ```
-        - **404**: Якщо профіль волонтера не знайдений.
+        - **404**: Якщо профіль волонтера не знайдений або вже неактивний.
           - Повертається повідомлення:
             ```json
             {
-                "detail": "Customer with Telegram ID <tg_id> not found"
+                "detail": "Customer with Telegram ID <tg_id> not found or is already inactive"
             }
             ```
         - **500**: Помилка сервера.
@@ -228,22 +230,28 @@ async def delete_profile(
 
         **Повертає:**
         - **204**: Якщо профіль успішно деактивовано, відповідь не містить тіла.
-
-        **Примітка:**
-        - Профіль може бути деактивований тільки після підтвердження користувача.
-        """
-    if not current_volunteer.is_verified:
-        raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
+    """
+    if not current_volunteer.is_verified or current_volunteer.role_id != 2:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. User is not authorized to perform this action"
+        )
 
     try:
         result = await db.execute(
-            select(models.Customer).filter(models.Customer.tg_id == current_volunteer.tg_id)
+            select(models.Customer).filter(
+                models.Customer.tg_id == current_volunteer.tg_id,
+                models.Customer.is_active == True,
+                models.Customer.role_id == 2
+            )
         )
         profile = result.scalar_one_or_none()
 
         if not profile:
-            raise HTTPException(status_code=404,
-                                detail=f'Customer with Telegram ID {current_volunteer.tg_id} not found')
+            raise HTTPException(
+                status_code=404,
+                detail=f"Customer with Telegram ID {current_volunteer.tg_id} not found or is already inactive"
+            )
 
         profile.is_active = False
         await db.commit()
@@ -251,7 +259,8 @@ async def delete_profile(
         return None
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f'Error: {e}')
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
+
 
 
 @router.post('/applications/accept/', status_code=200)

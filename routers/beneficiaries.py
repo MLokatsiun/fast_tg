@@ -380,8 +380,14 @@ async def get_applications(
 
     try:
         if type == 'accessible':
-            query = select(models.Applications, models.Locations).join(
+            query = select(
+                models.Applications,
+                models.Locations,
+                models.Customer
+            ).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).outerjoin(
+                models.Customer, models.Applications.executor_id == models.Customer.id
             ).filter(
                 models.Applications.creator_id == current_user.id,
                 models.Applications.is_done.is_(False),
@@ -390,8 +396,14 @@ async def get_applications(
             )
 
         elif type == 'is_progressing':
-            query = select(models.Applications, models.Locations).join(
+            query = select(
+                models.Applications,
+                models.Locations,
+                models.Customer
+            ).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).outerjoin(
+                models.Customer, models.Applications.executor_id == models.Customer.id
             ).filter(
                 models.Applications.creator_id == current_user.id,
                 models.Applications.is_in_progress.is_(True),
@@ -400,8 +412,14 @@ async def get_applications(
             )
 
         elif type == 'complete':
-            query = select(models.Applications, models.Locations).join(
+            query = select(
+                models.Applications,
+                models.Locations,
+                models.Customer
+            ).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).outerjoin(
+                models.Customer, models.Applications.executor_id == models.Customer.id
             ).filter(
                 models.Applications.creator_id == current_user.id,
                 models.Applications.is_done.is_(True),
@@ -424,7 +442,11 @@ async def get_applications(
                     'longitude': application.Locations.longitude,
                     'address_name': application.Locations.address_name
                 },
-                'executor_id': application.Applications.executor_id,
+                'executor': {
+                    'id': application.Customer.id if application.Customer else None,
+                    'first_name': application.Customer.firstname if application.Customer else None,
+                    'phone_num': application.Customer.phone_num if application.Customer else None
+                } if application.Customer else None,
                 'is_in_progress': application.Applications.is_in_progress,
                 'is_done': application.Applications.is_done,
                 'date_at': application.Applications.date_at,

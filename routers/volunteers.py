@@ -521,6 +521,27 @@ async def cancel_application(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f'Error: {e}')
 
+import math
+
+def haversine(lat1, lon1, lat2, lon2):
+    """
+    Обчислює відстань між двома точками на основі їхніх координат (широта, довгота)
+    за допомогою формули Haversine.
+    :param lat1, lon1: координати першої точки (волонтер)
+    :param lat2, lon2: координати другої точки (заявка)
+    :return: відстань в кілометрах
+    """
+    R = 6371  # Радіус Землі в кілометрах
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return R * c
+
 
 @router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
@@ -529,58 +550,57 @@ async def get_applications(
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
     """
-    **Отримати список заявок за типом.**
+        **Отримати список заявок за типом.**
 
-    - **type**: Тип заявок (обов'язково): 'available', 'in_progress', 'finished'.
-        - `available`: Заявки, які доступні для виконання.
-        - `in_progress`: Заявки, що знаходяться в процесі виконання (тільки для поточного волонтера).
-        - `finished`: Завершені заявки.
-    - **db**: Сесія бази даних для виконання запиту.
-    - **current_volunteer**: Волонтер, який наразі аутентифікований в системі.
+        - **type**: Тип заявок (обов'язково): 'available', 'in_progress', 'finished'.
+            - `available`: Заявки, які доступні для виконання.
+            - `in_progress`: Заявки, що знаходяться в процесі виконання (тільки для поточного волонтера).
+            - `finished`: Завершені заявки.
+        - **db**: Сесія бази даних для виконання запиту.
+        - **current_volunteer**: Волонтер, який наразі аутентифікований в системі.
 
-    **Відповідь:**
-    - **200**: Список заявок, що відповідають вказаному типу. Повертається список об'єктів заявок.
-    - **403**: Доступ заборонено для не верифікованих користувачів.
-    - **404**: Некоректний тип заявок.
-        - Повертається повідомлення:
+        **Відповідь:**
+        - **200**: Список заявок, що відповідають вказаному типу. Повертається список об'єктів заявок.
+        - **403**: Доступ заборонено для не верифікованих користувачів.
+        - **404**: Некоректний тип заявок.
+            - Повертається повідомлення:
+              ```json
+              {
+                  "detail": "Invalid application type"
+              }
+              ```
+
+        **Формат відповіді:**
+        - **200**: Список заявок для запитуваного типу. Кожен елемент списку містить такі поля:
           ```json
-          {
-              "detail": "Invalid application type"
-          }
+          [
+            {
+                "id": 1,
+                "description": "Опис заявки",
+                "category_id": 2,
+                "location": {
+                    "latitude": 48.858844,
+                    "longitude": 2.294351,
+                    "address_name": "Ейфелева вежа, Париж"
+                },
+                "executor_id": 4,
+                "is_in_progress": false,
+                "is_done": false,
+                "date_at": "2024-11-16T10:00:00",
+                "active_to": "2024-11-20T10:00:00"
+            },
+            ...
+          ]
           ```
 
-    **Формат відповіді:**
-    - **200**: Список заявок для запитуваного типу. Кожен елемент списку містить такі поля:
-      ```json
-      [
-        {
-            "id": 1,
-            "description": "Опис заявки",
-            "category_id": 2,
-            "location": {
-                "latitude": 48.858844,
-                "longitude": 2.294351,
-                "address_name": "Ейфелева вежа, Париж"
-            },
-            "executor_id": 4,
-            "is_in_progress": false,
-            "is_done": false,
-            "date_at": "2024-11-16T10:00:00",
-            "active_to": "2024-11-20T10:00:00"
-        },
-        ...
-      ]
-      ```
-
-    **Примітка:**
-    - У разі помилки запиту або некоректного значення типу заявки повертається відповідь з помилкою.
-    - Для отримання списку заявок необхідно вказати правильний тип: 'available', 'in_progress' або 'finished'.
-    """
+        **Примітка:**
+        - У разі помилки запиту або некоректного значення типу заявки повертається відповідь з помилкою.
+        - Для отримання списку заявок необхідно вказати правильний тип: 'available', 'in_progress' або 'finished'.
+        """
     if not current_volunteer.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
     try:
-        # Отримуємо категорію волонтера через Ink_CustomerCategories
         category_query = await db.execute(
             select(models.Ink_CustomerCategories.category_id).where(
                 models.Ink_CustomerCategories.customer_id == current_volunteer.id
@@ -590,6 +610,19 @@ async def get_applications(
 
         if not category:
             raise HTTPException(status_code=404, detail="Category for volunteer not found.")
+
+        volunteer_location_query = await db.execute(
+            select(models.Locations.latitude, models.Locations.longitude).where(
+                models.Locations.id == current_volunteer.location_id
+            )
+        )
+        volunteer_location = volunteer_location_query.first()
+
+        if volunteer_location is None or len(volunteer_location) != 2:
+            raise HTTPException(status_code=404, detail="Volunteer location coordinates are invalid.")
+
+        volunteer_latitude = volunteer_location[0]
+        volunteer_longitude = volunteer_location[1]
 
         if type == 'available':
             query = select(models.Applications, models.Locations).join(
@@ -623,8 +656,13 @@ async def get_applications(
         result = await db.execute(query)
         applications = result.fetchall()
 
-        response_data = [
-            {
+        response_data = []
+        for application in applications:
+            app_latitude = application.Locations.latitude
+            app_longitude = application.Locations.longitude
+            distance = haversine(volunteer_latitude, volunteer_longitude, app_latitude, app_longitude)
+
+            response_data.append({
                 "id": application.Applications.id,
                 "description": application.Applications.description,
                 "category_id": application.Applications.category_id,
@@ -637,10 +675,9 @@ async def get_applications(
                 "is_in_progress": application.Applications.is_in_progress,
                 "is_done": application.Applications.is_done,
                 "date_at": application.Applications.date_at,
-                "active_to": application.Applications.active_to
-            }
-            for application in applications
-        ]
+                "active_to": application.Applications.active_to,
+                "distance": distance
+            })
 
         return JSONResponse(content=response_data, status_code=200)
 

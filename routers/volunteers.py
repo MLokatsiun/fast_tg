@@ -546,6 +546,7 @@ def haversine(lat1, lon1, lat2, lon2):
 @router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
         type: Optional[str] = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
+        radius_km: float = Query(10.0, description="Радіус пошуку заявок у кілометрах"),
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
@@ -606,10 +607,11 @@ async def get_applications(
                 models.Ink_CustomerCategories.customer_id == current_volunteer.id
             )
         )
-        category = category_query.scalars().first()
+        categories = category_query.scalars().all()
 
-        if not category:
-            raise HTTPException(status_code=404, detail="Category for volunteer not found.")
+        if not categories:
+            categories = []
+
 
         volunteer_location_query = await db.execute(
             select(models.Locations.latitude, models.Locations.longitude).where(
@@ -619,10 +621,10 @@ async def get_applications(
         volunteer_location = volunteer_location_query.first()
 
         if volunteer_location is None or len(volunteer_location) != 2:
-            raise HTTPException(status_code=404, detail="Volunteer location coordinates are invalid.")
+            raise HTTPException(status_code=404, detail="Volunteer location not found or invalid.")
 
-        volunteer_latitude = volunteer_location[0]
-        volunteer_longitude = volunteer_location[1]
+        volunteer_latitude, volunteer_longitude = volunteer_location
+
 
         if type == 'available':
             query = select(models.Applications, models.Locations).join(
@@ -630,9 +632,11 @@ async def get_applications(
             ).filter(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_in_progress.is_(False),
-                models.Applications.is_active.is_(True),
-                models.Applications.category_id == category
+                models.Applications.is_active.is_(True)
             )
+            if categories:
+                query = query.filter(models.Applications.category_id.in_(categories))
+
         elif type == 'in_progress':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
@@ -642,6 +646,7 @@ async def get_applications(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_active.is_(True)
             )
+
         elif type == 'finished':
             query = select(models.Applications, models.Locations).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
@@ -650,6 +655,7 @@ async def get_applications(
                 models.Applications.executor_id == current_volunteer.id,
                 models.Applications.is_active.is_(True)
             )
+
         else:
             raise HTTPException(status_code=404, detail="Invalid application type")
 
@@ -662,27 +668,32 @@ async def get_applications(
             app_longitude = application.Locations.longitude
             distance = haversine(volunteer_latitude, volunteer_longitude, app_latitude, app_longitude)
 
-            response_data.append({
-                "id": application.Applications.id,
-                "description": application.Applications.description,
-                "category_id": application.Applications.category_id,
-                "location": {
-                    "latitude": application.Locations.latitude,
-                    "longitude": application.Locations.longitude,
-                    "address_name": application.Locations.address_name
-                },
-                "executor_id": application.Applications.executor_id,
-                "is_in_progress": application.Applications.is_in_progress,
-                "is_done": application.Applications.is_done,
-                "date_at": application.Applications.date_at,
-                "active_to": application.Applications.active_to,
-                "distance": distance
-            })
+            if distance <= radius_km:
+                response_data.append({
+                    "id": application.Applications.id,
+                    "description": application.Applications.description,
+                    "category_id": application.Applications.category_id,
+                    "location": {
+                        "latitude": app_latitude,
+                        "longitude": app_longitude,
+                        "address_name": application.Locations.address_name
+                    },
+                    "executor_id": application.Applications.executor_id,
+                    "is_in_progress": application.Applications.is_in_progress,
+                    "is_done": application.Applications.is_done,
+                    "date_at": application.Applications.date_at,
+                    "active_to": application.Applications.active_to,
+                    "distance": round(distance, 1)
+                })
+
+        if not response_data:
+            return JSONResponse(content={"detail": "No applications found within the specified radius."}, status_code=200)
 
         return JSONResponse(content=response_data, status_code=200)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
 
 
 from sqlalchemy import func

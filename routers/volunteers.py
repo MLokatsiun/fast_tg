@@ -1,3 +1,5 @@
+from sqlalchemy.orm import selectinload
+
 from business_logical import (get_current_volonter, get_coordinates)
 import models
 from schemas import EditCustomerBase, AcceptApplicationBase, ApplicationsList
@@ -262,13 +264,73 @@ async def delete_profile(
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
 
-
 @router.post('/applications/accept/', status_code=200)
 async def accept_application(
         app_id: AcceptApplicationBase,
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
+    """
+        Прийняття заявки волонтером.
+
+        Цей ендпоінт дозволяє волонтеру прийняти заявку для виконання. Якщо волонтер не підтверджений або вже має 3 активні заявки, запит буде відхилено.
+
+        **Параметри запиту**:
+        - `application_id`: ID заявки, яку волонтер хоче прийняти.
+
+        **Параметри тіла запиту**:
+        - `application_id` (int): Унікальний ідентифікатор заявки, яку потрібно прийняти.
+
+        **Відповідь**:
+        - Успішна відповідь містить оновлену інформацію про заявку з локацією:
+            - `id`: ID заявки
+            - `category_id`: ID категорії заявки
+            - `location`: Деталі локації (широта, довгота, адреса)
+            - `executor_id`: ID виконавця (волонтера)
+            - `description`: Опис заявки
+            - `is_in_progress`: Статус виконання
+            - `is_done`: Статус завершення
+            - `date_at`: Дата подачі заявки
+            - `active_to`: Дата завершення активності заявки
+
+        **Помилки**:
+        - **403 Access denied**: Якщо користувач не є підтвердженим волонтером.
+        - **400 Volunteer already has 3 applications in progress**: Якщо волонтер вже має 3 активні заявки.
+        - **404 Application not found**: Якщо заявка з вказаним ID не знайдена.
+        - **500 Internal Server Error**: Якщо сталася внутрішня помилка на сервері.
+
+        **Приклад запиту**:
+        ```
+        POST /applications/accept/
+        {
+            "application_id": 123
+        }
+        ```
+
+        **Приклад відповіді**:
+        ```json
+        {
+            "id": 123,
+            "category_id": 1,
+            "location": {
+                "latitude": 48.8588443,
+                "longitude": 2.2943506,
+                "address_name": "Paris, France"
+            },
+            "executor_id": 456,
+            "description": "Заявка на прибирання",
+            "is_in_progress": true,
+            "is_done": false,
+            "date_at": "2024-12-09T18:45:45",
+            "active_to": "2025-12-09T00:00:00"
+        }
+        ```
+
+        **Технічні деталі**:
+        - Використовується асинхронний запит до бази даних через SQLAlchemy для отримання заявки і локації.
+        - Перевірка, чи волонтер має право прийняти заявку на основі статусу підтвердження і кількості активних заявок.
+        - Інформація про локацію включає широту, довготу та адресу.
+        """
     if not current_volunteer.is_verified:
         raise HTTPException(status_code=403, detail="Access denied. User not verified by moderator")
 
@@ -286,6 +348,7 @@ async def accept_application(
 
         application_query = await db.execute(
             select(models.Applications).where(models.Applications.id == app_id.application_id)
+            .options(selectinload(models.Applications.location))
         )
         application = application_query.scalars().first()
 
@@ -297,10 +360,17 @@ async def accept_application(
 
         await db.commit()
 
+        location = application.location
+        location_info = {
+            "latitude": location.latitude if location else "Не вказано",
+            "longitude": location.longitude if location else "Не вказано",
+            "address_name": location.address_name if location else "Не вказано"
+        }
+
         return JSONResponse(content={
             'id': application.id,
             'category_id': application.category_id,
-            'location_id': application.location_id,
+            'location': location_info,
             'executor_id': application.executor_id,
             'description': application.description,
             'is_in_progress': application.is_in_progress,
@@ -312,7 +382,6 @@ async def accept_application(
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
 
 
 @router.post('/applications/close/', status_code=200)
@@ -521,7 +590,9 @@ async def cancel_application(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f'Error: {e}')
 
+
 import math
+
 
 def haversine(lat1, lon1, lat2, lon2):
     """

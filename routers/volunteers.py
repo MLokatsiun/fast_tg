@@ -612,7 +612,6 @@ async def get_applications(
         if not categories:
             categories = []
 
-
         volunteer_location_query = await db.execute(
             select(models.Locations.latitude, models.Locations.longitude).where(
                 models.Locations.id == current_volunteer.location_id
@@ -625,10 +624,11 @@ async def get_applications(
 
         volunteer_latitude, volunteer_longitude = volunteer_location
 
-
         if type == 'available':
-            query = select(models.Applications, models.Locations).join(
+            query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).join(
+                models.Customer, models.Applications.creator_id == models.Customer.id
             ).filter(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_in_progress.is_(False),
@@ -638,8 +638,10 @@ async def get_applications(
                 query = query.filter(models.Applications.category_id.in_(categories))
 
         elif type == 'in_progress':
-            query = select(models.Applications, models.Locations).join(
+            query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).join(
+                models.Customer, models.Applications.creator_id == models.Customer.id
             ).filter(
                 models.Applications.is_in_progress.is_(True),
                 models.Applications.executor_id == current_volunteer.id,
@@ -648,8 +650,10 @@ async def get_applications(
             )
 
         elif type == 'finished':
-            query = select(models.Applications, models.Locations).join(
+            query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
+            ).join(
+                models.Customer, models.Applications.creator_id == models.Customer.id
             ).filter(
                 models.Applications.is_done.is_(True),
                 models.Applications.executor_id == current_volunteer.id,
@@ -678,6 +682,11 @@ async def get_applications(
                         "longitude": app_longitude,
                         "address_name": application.Locations.address_name
                     },
+                    "creator": {
+                        "id": application.Customer.id,
+                        "first_name": application.Customer.firstname,
+                        "phone_num": application.Customer.phone_num
+                    },
                     "executor_id": application.Applications.executor_id,
                     "is_in_progress": application.Applications.is_in_progress,
                     "is_done": application.Applications.is_done,
@@ -687,13 +696,13 @@ async def get_applications(
                 })
 
         if not response_data:
-            return JSONResponse(content={"detail": "No applications found within the specified radius."}, status_code=200)
+            return JSONResponse(content={"detail": "No applications found within the specified radius."},
+                                status_code=200)
 
         return JSONResponse(content=response_data, status_code=200)
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
-
 
 
 from sqlalchemy import func

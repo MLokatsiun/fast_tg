@@ -156,4 +156,44 @@ async def get_categories(
     ]
 
 
+@router.post("/customers/", status_code=200)
+async def get_customers(
+        for_developers: ForDevelopers = Body(...),
+        db: AsyncSession = Depends(get_db)
+):
+    """
+    Отримання користувачів для клієнта.
+    """
+    client_query = select(models.Client).filter(models.Client.name == for_developers.client)
+    client_result = await db.execute(client_query)
+    client_entry = client_result.scalars().first()
+
+    if not client_entry:
+        raise HTTPException(status_code=400, detail="Invalid client type")
+
+    if not pwd_context.verify(for_developers.password, client_entry.password):
+        raise HTTPException(status_code=400, detail="Incorrect password for client")
+
+    customer_query = select(models.Customer).filter(models.Customer.client_id == client_entry.id)
+    customer_result = await db.execute(customer_query)
+    customers = customer_result.scalars().all()
+
+    response = []
+    for customer in customers:
+        if customer.is_verified:
+            continue
+        if not customer.is_active:
+            continue
+
+        response.append({
+            "id": customer.id,
+            "phone_num": customer.phone_num,
+            "firstname": customer.firstname,
+            "lastname": customer.lastname,
+            "role": customer.role_id
+        })
+
+    return response
+
+
 

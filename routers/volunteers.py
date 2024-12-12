@@ -617,7 +617,7 @@ def haversine(lat1, lon1, lat2, lon2):
 @router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
         type: Optional[str] = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
-        radius_km: float = Query(10.0, description="Радіус пошуку заявок у кілометрах"),
+        radius_km: float = Query(500.0, description="Радіус пошуку заявок у кілометрах"),
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):

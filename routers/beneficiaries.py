@@ -262,6 +262,7 @@ async def confirm_application(
         raise HTTPException(status_code=400, detail='The task has not been marked as done by the executor')
 
     application.is_finished = True
+    application.is_active = False
 
     await db.commit()
 

@@ -9,6 +9,7 @@ from decouple import config
 
 PASSWORD_380968101250 = config('PASSWORD_380968101250')
 PASSWORD_380123456789 = config("PASSWORD_380123456789")
+PASSWORD_380501546037 = config("PASSWORD_380501546037")
 PASSWORD_TELEGRAM = config("PASSWORD_TELEGRAM")
 PASSWORD_FRONTEND = config("PASSWORD_FRONTEND")
 
@@ -50,10 +51,10 @@ async def initialize_data(db: AsyncSession):
                 "password": PASSWORD_380968101250
             },
             {
-                "phone_number": "380123456789",
+                "phone_number": "380501546037",
                 "role_id": 3,
                 "client_id": 1,
-                "password": PASSWORD_380123456789
+                "password": PASSWORD_380501546037
             }
         ]
         for moderator_data in moderators:

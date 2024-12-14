@@ -60,7 +60,7 @@ async def initialize_data(db: AsyncSession):
                 "phone_number": "380501546037",
                 "role_id": 3,
                 "client_id": 1,
-                "password": PASSWORD_380123456789
+                "password": PASSWORD_380501546037
             }
         ]
         for moderator_data in moderators:

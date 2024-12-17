@@ -409,9 +409,10 @@ async def get_applications_for_developers(
             raise HTTPException(status_code=404, detail="Invalid application type")
 
         if category_ids:
-            query = query.filter(models.Applications.category_id.in_(category_ids))
+            if 0 not in category_ids:
+                query = query.filter(models.Applications.category_id.in_(category_ids))
 
-        if days_valid is not None:
+        if days_valid is not None and days_valid > 0:
             from sqlalchemy import cast, DateTime
             from datetime import datetime, timedelta
             current_date = datetime.utcnow()
@@ -425,7 +426,8 @@ async def get_applications_for_developers(
         for application in applications:
             executor_data = None
             if application.Applications.executor_id:
-                executor_query = select(models.Customer).filter(models.Customer.id == application.Applications.executor_id)
+                executor_query = select(models.Customer).filter(
+                    models.Customer.id == application.Applications.executor_id)
                 executor_result = await db.execute(executor_query)
                 executor = executor_result.scalar()
                 if executor:

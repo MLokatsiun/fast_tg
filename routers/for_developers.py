@@ -1,21 +1,28 @@
 import math
+from datetime import timedelta, datetime
+from xmlrpc.client import DateTime
 
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from jose import jwt, JWTError
 from sqlalchemy import func
+from starlette import status
 from starlette.responses import JSONResponse
 
+from business_logical import verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token
 from database import get_db
 import models
 from passlib.context import CryptContext
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-
-from schemas import ForDevelopers, ApplicationsList
-from typing import List, Optional
+import jwt
+from decouple import config
 from fastapi import Depends, APIRouter, Query
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter()
 
+ALGORITHM = "HS256"
+SECRET_KEY = config("SECRET_KEY")
 from fastapi import Body
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -26,7 +33,7 @@ def haversine(lat1, lon1, lat2, lon2):
     :param lat2, lon2: координати другої точки (заявка)
     :return: відстань в кілометрах
     """
-    R = 6371  # Радіус Землі в кілометрах
+    R = 6371
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -37,153 +44,220 @@ def haversine(lat1, lon1, lat2, lon2):
 
     return R * c
 
-@router.post("/roles/", status_code=200)
+from pydantic import BaseModel
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenRequest(BaseModel):
+    client: str
+    password: str
+
+
+@router.post("/token", response_model=Token)
+async def login_for_access_token(
+        token_request: TokenRequest,
+        db: AsyncSession = Depends(get_db),
+):
+    """
+    **Отримання токену доступу для клієнта.**
+
+    - **Ендпоінт**: POST `/token`
+    - **Опис**: Отримання JWT токену для авторизації клієнта.
+
+    **Вхідні параметри**:
+    - **client**: Назва клієнта (наприклад, `frontend` або `telegram`).
+    - **password**: Пароль клієнта.
+
+    **Відповідь**:
+    - **200**: Токен доступу:
+      ```json
+      {
+          "access_token": "your_access_token",
+          "token_type": "bearer"
+      }
+      ```
+
+    **Примітки**:
+    - Перевіряється відповідність клієнта та пароля.
+    """
+    client_query = select(models.Client).filter(models.Client.name == token_request.client)
+    client_result = await db.execute(client_query)
+    client_entry = client_result.scalars().first()
+
+    if not client_entry:
+        raise HTTPException(status_code=401, detail="Invalid client type or password")
+
+    if not verify_password(token_request.password, client_entry.password):
+        raise HTTPException(status_code=401, detail="Invalid client type or password")
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": token_request.client}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+def verify_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload["sub"]
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+@router.get("/roles/", status_code=200)
 async def get_roles(
-        for_developers: ForDevelopers = Body(...),
+        token: str = Depends(oauth2_scheme),
         db: AsyncSession = Depends(get_db)
 ):
     """
-        **Отримання ролей для клієнта.**
+    **Отримання всіх ролей.**
 
-        - **Ендпоінт**: POST `/roles/`
-        - **Опис**: Дозволяє отримати список ролей для вказаного клієнта.
-        - **Вхідні параметри**:
-          - **for_developers**: Дані для авторизації:
-            ```json
-            {
-                "client": "Назва клієнта",
-                "password": "Пароль клієнта"
-            }
-            ```
-            - **client**: Назва клієнта, для якого запитуються ролі.
-            - **password**: Пароль клієнта для перевірки доступу.
+    - **Ендпоінт**: `GET /roles/`
+    - **Опис**: Дозволяє отримати список всіх ролей в системі, незалежно від клієнта.
 
-        **Відповідь:**
-        - **200**: Список ролей для клієнта. Повертається масив ролей:
-            ```json
-            [
-                {
-                    "id": 1,
-                    "name": "Role Name"
-                },
-                {
-                    "id": 2,
-                    "name": "Another Role"
-                }
-            ]
-            ```
-        - **400**: Помилка вхідних даних. Наприклад, невірний клієнт або неправильний пароль:
-            ```json
-            {
-                "detail": "Invalid client type"
-            }
-            ```
-        - **500**: Помилка сервера або бази даних:
-            ```json
-            {
-                "detail": "Error: ..."
-            }
-            ```
+    **Вхідні параметри:**
+    - **token**: Авторизаційний токен (Bearer Token), який використовується для перевірки доступу до ендпоінту.
 
-        **Примітки:**
-        - Для доступу до ролей необхідно вказати правильний клієнт та пароль.
-        """
-    client_result = await db.execute(
-        select(models.Client).filter(models.Client.name == for_developers.client)
-    )
-    client_entry = client_result.scalars().first()
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type")
+    **Відповідь:**
+    - **200 OK**: Повертається список всіх ролей в системі. Кожна роль містить:
+      ```json
+      [
+          {
+              "id": 1,
+              "name": "Роль 1"
+          },
+          {
+              "id": 2,
+              "name": "Роль 2"
+          }
+      ]
+      ```
+    - **400 Bad Request**: Якщо токен недійсний або не надано токен:
+      ```json
+      {
+          "detail": "Invalid token"
+      }
+      ```
+    - **500 Internal Server Error**: Якщо сталася помилка на сервері під час виконання запиту:
+      ```json
+      {
+          "detail": "Error: <error_message>"
+      }
+      ```
 
-    if not pwd_context.verify(for_developers.password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Incorrect password for client")
+    **Примітки:**
+    - Токен перевіряється для авторизації запиту. Якщо токен недійсний або відсутній, буде повернута помилка 400.
+    - Повертається список всіх ролей, де кожна роль містить:
+      - **id**: ID ролі.
+      - **name**: Назва ролі.
+    """
 
-    result = await db.execute(select(models.Roles))
-    roles = result.scalars().all()
-    return [{"id": role.id, "name": role.name} for role in roles]
+    verify_token(token)
+
+    try:
+        result = await db.execute(select(models.Roles))
+        roles = result.scalars().all()
+
+        return [{"id": role.id, "name": role.name} for role in roles]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
 
 
-@router.post("/categories/", status_code=200)
+@router.get("/categories/", status_code=200)
 async def get_categories(
-        for_developers: ForDevelopers = Body(...),
+        token: str = Depends(oauth2_scheme),
         db: AsyncSession = Depends(get_db)
 ):
     """
-        **Отримання категорій для клієнта.**
+    **Отримання всіх категорій.**
 
-        - **Ендпоінт**: POST `/categories/`
-        - **Опис**: Дозволяє отримати список категорій для вказаного клієнта.
-        - **Вхідні параметри**:
-          - **for_developers**: Дані для авторизації:
-            ```json
-            {
-                "client": "Назва клієнта",
-                "password": "Пароль клієнта"
-            }
-            ```
-            - **client**: Назва клієнта, для якого запитуються категорії.
-            - **password**: Пароль клієнта для перевірки доступу.
+    - **Ендпоінт**: `GET /categories/`
+    - **Опис**: Дозволяє отримати список всіх категорій в системі, незалежно від клієнта.
 
-        **Відповідь:**
-        - **200**: Список категорій для клієнта. Повертається масив категорій:
-            ```json
-            [
-                {
-                    "id": 1,
-                    "name": "Category Name",
-                    "parent_id": 0,
-                    "is_active": true
-                },
-                {
-                    "id": 2,
-                    "name": "Another Category",
-                    "parent_id": 1,
-                    "is_active": false
-                }
-            ]
-            ```
-        - **400**: Помилка вхідних даних. Наприклад, невірний клієнт або неправильний пароль:
-            ```json
-            {
-                "detail": "Invalid client type"
-            }
-            ```
-        - **500**: Помилка сервера або бази даних:
-            ```json
-            {
-                "detail": "Error: ..."
-            }
-            ```
+    **Вхідні параметри:**
+    - **token**: Авторизаційний токен (Bearer Token), який використовується для перевірки доступу до ендпоінту.
 
-        **Примітки:**
-        - Для доступу до категорій необхідно вказати правильний клієнт та пароль.
-        """
-    client_result = await db.execute(
-        select(models.Client).filter(models.Client.name == for_developers.client)
-    )
-    client_entry = client_result.scalars().first()
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type")
+    **Відповідь:**
+    - **200 OK**: Повертається список всіх категорій в системі. Кожна категорія містить:
+      ```json
+      [
+          {
+              "id": 1,
+              "name": "Категорія 1",
+              "parent_id": null,
+              "is_active": true
+          },
+          {
+              "id": 2,
+              "name": "Категорія 2",
+              "parent_id": 1,
+              "is_active": true
+          }
+      ]
+      ```
+    - **401 Unauthorized**: Якщо токен недійсний або не надано токен:
+      ```json
+      {
+          "detail": "Invalid token"
+      }
+      ```
+    - **500 Internal Server Error**: Якщо сталася помилка на сервері під час виконання запиту:
+      ```json
+      {
+          "detail": "Error: <error_message>"
+      }
+      ```
 
-    if not pwd_context.verify(for_developers.password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Incorrect password for client")
+    **Примітки:**
+    - Токен перевіряється, щоб авторизувати запит. Якщо токен недійсний або відсутній, буде повернута помилка 401.
+    - Повертається список всіх категорій у системі, де кожна категорія містить наступні поля:
+      - **id**: ID категорії.
+      - **name**: Назва категорії.
+      - **parent_id**: ID батьківської категорії (якщо є).
+      - **is_active**: Статус категорії (активна чи ні).
+    """
 
-    result = await db.execute(select(models.Categories))
-    categories = result.scalars().all()
-    return [
-        {
-            "id": category.id,
-            "name": category.name,
-            "parent_id": category.parent_id,
-            "is_active": category.is_active,
-        }
-        for category in categories
-    ]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        client_name: str = payload.get("sub")
+        if client_name is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
 
 
-@router.post("/customers/", status_code=200)
+        client_result = await db.execute(
+            select(models.Client).filter(models.Client.name == client_name)
+        )
+        client_entry = client_result.scalars().first()
+
+        if not client_entry:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    try:
+        result = await db.execute(select(models.Categories))
+        categories = result.scalars().all()
+
+        return [
+            {"id": category.id, "name": category.name, "parent_id": category.parent_id, "is_active": category.is_active}
+            for category in categories
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
+
+
+@router.get("/customers/", status_code=200)
 async def get_customers(
-        for_developers: ForDevelopers = Body(...),
+        token: str = Depends(oauth2_scheme),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -192,15 +266,7 @@ async def get_customers(
     - **Ендпоінт**: POST `/customers/`
     - **Опис**: Дозволяє отримати список користувачів для вказаного клієнта.
     - **Вхідні параметри**:
-      - **for_developers**: Дані для авторизації:
-        ```json
-        {
-            "client": "Назва клієнта",
-            "password": "Пароль клієнта"
-        }
-        ```
-        - **client**: Назва клієнта для якого запитуються користувачі.
-        - **password**: Пароль клієнта для перевірки доступу.
+      - **token**: Авторизаційний токен (Bearer Token).
       - **db**: Сесія бази даних для виконання запиту.
 
     **Відповідь:**
@@ -223,10 +289,10 @@ async def get_customers(
         }
       ]
       ```
-    - **400**: Помилка вхідних даних. Наприклад, невірний клієнт або неправильний пароль:
+    - **401**: Помилка авторизації. Токен недійсний або не надано токен:
       ```json
       {
-          "detail": "Invalid client type"
+          "detail": "Invalid token"
       }
       ```
     - **500**: Помилка сервера або бази даних:
@@ -237,149 +303,149 @@ async def get_customers(
       ```
 
     **Примітки:**
-    - Для доступу до списку користувачів необхідно вказати правильний клієнт та пароль.
+    - Для доступу до списку користувачів необхідно вказати правильний токен.
     - Повертається лише список активних, не верифікованих користувачів.
     """
-    client_query = select(models.Client).filter(models.Client.name == for_developers.client)
-    client_result = await db.execute(client_query)
-    client_entry = client_result.scalars().first()
 
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        client_name: str = payload.get("sub")
+        if client_name is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
 
-    if not pwd_context.verify(for_developers.password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Incorrect password for client")
+        client_query = select(models.Client).filter(models.Client.name == client_name)
+        client_result = await db.execute(client_query)
+        client_entry = client_result.scalars().first()
 
-    customer_query = select(models.Customer).filter(models.Customer.client_id == client_entry.id)
-    customer_result = await db.execute(customer_query)
-    customers = customer_result.scalars().all()
+        if not client_entry:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-    response = []
-    for customer in customers:
-        if customer.is_verified:
-            continue
-        if not customer.is_active:
-            continue
+    try:
 
-        response.append({
-            "id": customer.id,
-            "phone_num": customer.phone_num,
-            "firstname": customer.firstname,
-            "lastname": customer.lastname,
-            "role": customer.role_id
-        })
+        customer_query = select(models.Customer).filter(models.Customer.client_id == client_entry.id)
+        customer_result = await db.execute(customer_query)
+        customers = customer_result.scalars().all()
 
-    return response
+        response = []
+        for customer in customers:
+            if customer.is_verified:
+                continue
+            if not customer.is_active:
+                continue
+
+            response.append({
+                "id": customer.id,
+                "phone_num": customer.phone_num,
+                "firstname": customer.firstname,
+                "lastname": customer.lastname,
+                "role": customer.role_id
+            })
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
+
 
 @router.post('/applications/', status_code=200)
 async def get_applications_for_developers(
-        client: str = Body(...),
-        password: str = Body(...),
+        token: str = Depends(oauth2_scheme),
         type: str = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
         category_ids: list[int] = Body(None, description="Список ID категорій для фільтрації"),
         days_valid: int = Body(None, description="Фільтр за кількістю днів дійсності заявки"),
         db: AsyncSession = Depends(get_db)
 ):
     """
-    **Отримати список заявок за типом для розробників із додатковими фільтрами.**
+    **Отримання списку заявок за типом для розробників із додатковими фільтрами**
 
-    - **Ендпоінт**: POST `/applications/`
+    - **Ендпоінт**: `POST /applications/`
     - **Опис**: Повертає список заявок на основі їх статусу (доступні, у прогресі, завершені)
-      з можливістю фільтрації за категоріями або тривалістю дійсності заявки.
+      з можливістю фільтрації за категоріями та за кількістю днів дійсності.
+      Заявки фільтруються за `active_to`, щоб показувати лише ті, що дійсні.
 
-    **Вхідні параметри**:
-    - **client** (*str*): Ім'я клієнта для авторизації.
-    - **password** (*str*): Пароль для клієнта.
-    - **type** (*str*): Тип заявок для отримання:
-      - `'available'`: Заявки, які доступні для виконання.
-      - `'in_progress'`: Заявки, які виконуються.
-      - `'finished'`: Заявки, які завершені.
-    - **category_ids** (*list[int]*, необов'язковий): Список ID категорій для фільтрації заявок.
-    - **days_valid** (*int*, необов'язковий): Фільтр заявок, які залишаються дійсними на певну кількість днів.
-    - **db** (*AsyncSession*): Підключення до бази даних.
+    **Вхідні параметри:**
+    - **token**: Авторизаційний токен (Bearer Token), необхідний для перевірки доступу.
+    - **type**: Тип заявок, які потрібно повернути. Можливі значення:
+      - `'available'`: доступні заявки.
+      - `'in_progress'`: заявки, що знаходяться в процесі виконання.
+      - `'finished'`: завершені заявки.
+    - **category_ids**: Список ID категорій для фільтрації заявок.
+    - **days_valid**: Фільтр за кількістю днів дійсності заявки. Якщо параметр задано, заявки будуть фільтруватися за `active_to`, щоб показувати лише ті, що будуть дійсні до вказаної кількості днів.
 
-    **Логіка обробки**:
-    1. Перевірка клієнта:
-       - Клієнт повинен існувати у базі даних.
-       - Пароль клієнта перевіряється через хешування.
-    2. Фільтрація заявок:
-       - Залежно від типу заявки (`available`, `in_progress`, `finished`).
-       - За необхідності враховується список категорій (`category_ids`).
-       - За необхідності враховується термін дійсності (`days_valid`).
-    3. Повернення інформації про заявки, включаючи:
-       - Локацію заявки.
-       - Інформацію про автора заявки.
-       - Інформацію про виконавця, якщо такий є.
-
-    **Відповіді**:
-    - **200 OK**: Успішний запит із списком заявок:
+    **Відповідь:**
+    - **200 OK**: Повертається список заявок, що відповідають вказаним критеріям фільтрації:
       ```json
       [
-        {
-          "id": 1,
-          "description": "Допомогти з доставкою продуктів",
-          "category_id": 3,
-          "location": {
-            "latitude": 50.4501,
-            "longitude": 30.5234,
-            "address_name": "Київ, вул. Хрещатик, 1"
-          },
-          "creator": {
-            "id": 12,
-            "first_name": "Іван",
-            "phone_num": "1234567890"
-          },
-          "executor": {
-            "id": 8,
-            "first_name": "Петро",
-            "phone_num": "0987654321"
-          },
-          "is_in_progress": true,
-          "is_done": false,
-          "date_at": "2024-12-01T12:00:00Z",
-          "active_to": "2024-12-17T12:00:00Z"
-        }
+          {
+              "id": 1,
+              "description": "Description of the application",
+              "category_id": 2,
+              "location": {
+                  "latitude": 50.4501,
+                  "longitude": 30.5236,
+                  "address_name": "Kyiv"
+              },
+              "creator": {
+                  "id": 1,
+                  "first_name": "John",
+                  "phone_num": "1234567890"
+              },
+              "executor": {
+                  "id": 2,
+                  "first_name": "Alice",
+                  "phone_num": "0987654321"
+              },
+              "is_in_progress": false,
+              "is_done": true,
+              "date_at": "2024-12-21T12:00:00",
+              "active_to": "2024-12-25T12:00:00"
+          }
       ]
       ```
-    - **200 OK**: Якщо заявки не знайдено:
-      ```json
-      {
-          "detail": "No applications found."
-      }
-      ```
-    - **400 Bad Request**: Невірний клієнт або неправильний пароль:
-      ```json
-      {
-          "detail": "Invalid client type"
-      }
-      ```
-    - **404 Not Found**: Якщо вказано неправильний тип заявки:
+    - **404 Not Found**: Якщо тип заявок не є допустимим.
       ```json
       {
           "detail": "Invalid application type"
       }
       ```
-    - **500 Internal Server Error**: Помилка сервера:
+    - **500 Internal Server Error**: Якщо сталася помилка на сервері або під час виконання запиту.
       ```json
       {
           "detail": "Error: <error_message>"
       }
       ```
 
-    **Примітки**:
-    - Параметри `client` та `password` обов'язкові для авторизації.
-    - Параметри `category_ids` та `days_valid` є необов'язковими, але дозволяють детальніше фільтрувати заявки.
-    - Тип заявки (`type`) визначає набір заявок, які будуть включені у відповідь.
+    **Примітки:**
+    - Для отримання даних потрібен дійсний токен.
+    - Запит повертає список заявок з додатковою інформацією:
+      - **id**: ID заявки.
+      - **description**: Опис заявки.
+      - **category_id**: ID категорії заявки.
+      - **location**: Інформація про місце розташування заявки (широта, довгота, адреса).
+      - **creator**: Інформація про користувача, який створив заявку.
+      - **executor**: Інформація про волонтера, який виконує заявку (якщо є).
+      - **is_in_progress**: Статус заявки (в процесі чи ні).
+      - **is_done**: Чи завершена заявка.
+      - **date_at**: Дата і час створення заявки.
+      - **active_to**: Термін дії заявки.
+
+    **Фільтрація:**
+    - Фільтрація за типом заявки (`available`, `in_progress`, `finished`).
+    - Можливість фільтрації за категоріями, якщо вказані їх ID.
+    - Можливість фільтрації за кількістю днів дійсності заявки через параметр `days_valid`.
+
     """
-    client_query = select(models.Client).filter(models.Client.name == client)
+
+    client_name = verify_token(token)
+
+    client_query = select(models.Client).filter(models.Client.name == client_name)
     client_result = await db.execute(client_query)
     client_entry = client_result.scalars().first()
 
     if not client_entry:
         raise HTTPException(status_code=400, detail="Invalid client type")
-
-    if not pwd_context.verify(password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Incorrect password for client")
 
     try:
         query = select(models.Applications, models.Locations, models.Customer).join(
@@ -414,10 +480,12 @@ async def get_applications_for_developers(
 
         if days_valid is not None and days_valid > 0:
             from sqlalchemy import cast, DateTime
-            from datetime import datetime, timedelta
             current_date = datetime.utcnow()
             valid_until = current_date + timedelta(days=days_valid)
             query = query.filter(cast(models.Applications.active_to, DateTime) <= valid_until)
+
+        current_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        query = query.filter(models.Applications.date_at > current_date_str)
 
         result = await db.execute(query)
         applications = result.fetchall()
@@ -466,26 +534,19 @@ async def get_applications_for_developers(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
-@router.post("/rating/", status_code=200)
+
+@router.get("/rating/", status_code=200)
 async def get_volunteer_rating(
-        for_developers: ForDevelopers = Body(...),
+        token: str = Depends(oauth2_scheme),
         db: AsyncSession = Depends(get_db)
 ):
     """
     **Отримання рейтингу волонтерів для клієнта.**
 
-    - **Ендпоінт**: POST `/rating/frontend/`
+    - **Ендпоінт**: POST `/rating/`
     - **Опис**: Дозволяє отримати список волонтерів, відсортованих за кількістю закритих заявок.
     - **Вхідні параметри**:
-      - **for_developers**: Дані для авторизації:
-        ```json
-        {
-            "client": "frontend",
-            "password": "пароль_клієнта"
-        }
-        ```
-        - **client**: Назва клієнта (наприклад, `frontend`).
-        - **password**: Пароль для клієнта.
+      - **token**: Авторизаційний токен (Bearer Token).
       - **db**: Сесія бази даних для виконання запиту.
 
     **Відповідь:**
@@ -499,10 +560,10 @@ async def get_volunteer_rating(
         ...
       ]
       ```
-    - **400**: Невірний клієнт або неправильний пароль:
+    - **401**: Невірний токен:
       ```json
       {
-          "detail": "Invalid client type or password"
+          "detail": "Invalid token"
       }
       ```
     - **500**: Помилка сервера або бази даних:
@@ -513,18 +574,24 @@ async def get_volunteer_rating(
       ```
 
     **Примітки:**
-    - Перевіряється відповідність клієнта та пароля.
+    - Перевіряється відповідність токену.
     - Повертається список волонтерів, які закрили заявки зі статусом `is_done = True`.
     """
-    client_query = select(models.Client).filter(models.Client.name == for_developers.client)
-    client_result = await db.execute(client_query)
-    client_entry = client_result.scalars().first()
 
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type or password")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        client_name: str = payload.get("sub")
+        if client_name is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
 
-    if not pwd_context.verify(for_developers.password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Invalid client type or password")
+        client_query = select(models.Client).filter(models.Client.name == client_name)
+        client_result = await db.execute(client_query)
+        client_entry = client_result.scalars().first()
+
+        if not client_entry:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     try:
         query = (
@@ -548,108 +615,84 @@ async def get_volunteer_rating(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
-
-@router.post('/applications/count', status_code=200)
-async def get_applications_count_by_type(
-        payload: ForDevelopers,
-        type: str = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
+@router.get('/applications/summary', status_code=200)
+async def get_applications_summary(
+        token: str = Depends(oauth2_scheme),
         db: AsyncSession = Depends(get_db)
 ):
     """
-    **Отримати кількість заявок за типом**
+        **Отримання зведення по заявкам та волонтерам**
 
-    - **Ендпоінт**: `POST /applications/count`
-    - **Опис**: Цей ендпоінт повертає кількість заявок у базі даних для вказаного типу. Типи заявок можуть бути:
-      - `available`: Доступні заявки (не завершені та не в процесі).
-      - `in_progress`: Заявки в процесі (не завершені, але в процесі виконання).
-      - `finished`: Завершені заявки (повністю виконані).
+        - **Ендпоінт**: `GET /applications/summary`
+        - **Опис**: Повертає зведену інформацію про заявки та волонтерів:
+          - Загальну кількість заявок.
+          - Кількість волонтерів з роль `role_id=2`.
+          - Кількість завершених (закритих) та неактивних заявок (`is_done=True` і `is_active=False`).
 
-    **Вхідні параметри**:
+        **Вхідні параметри:**
+        - **token**: Авторизаційний токен (Bearer Token), який необхідний для перевірки доступу до даних.
 
-    - **payload** (*JSON*): Авторизаційні дані клієнта:
-        - **client** (*str*): Ім'я клієнта для авторизації (наприклад, `frontend` або `telegram`).
-        - **password** (*str*): Пароль для клієнта.
+        **Відповідь:**
+        - **200 OK**: Повертається зведена інформація по заявках та волонтерам у вигляді JSON-об'єкта:
+          ```json
+          {
+              "total_applications": 100,  // Загальна кількість заявок
+              "volunteers_count": 25,     // Кількість волонтерів з role_id=2
+              "completed_inactive_applications": 10  // Кількість завершених та неактивних заявок
+          }
+          ```
+        - **401 Unauthorized**: Якщо токен недійсний або не надано токен:
+          ```json
+          {
+              "detail": "Invalid or expired token"
+          }
+          ```
+        - **500 Internal Server Error**: Якщо сталася помилка сервера або бази даних:
+          ```json
+          {
+              "detail": "Error: <error_message>"
+          }
+          ```
 
-    - **type** (*Query*): Тип заявок, для яких потрібно отримати кількість:
-        - `'available'`: Доступні заявки.
-        - `'in_progress'`: Заявки в процесі виконання.
-        - `'finished'`: Завершені заявки.
+        **Примітки:**
+        - Токен перевіряється перед отриманням даних.
+        - Запит повертає три основні показники:
+          1. **total_applications**: Загальна кількість заявок.
+          2. **volunteers_count**: Кількість волонтерів з роллю `role_id=2`.
+          3. **completed_inactive_applications**: Кількість завершених заявок, які більше не активні (`is_done=True`, `is_active=False`).
 
-    **Відповіді**:
-
-    - **200 OK**: Успішний запит, повертається кількість заявок для вказаного типу. Формат відповіді:
-    ```json
-    {
-        "type": "available",
-        "count": 10
-    }
-    ```
-    - **400 Bad Request**: Невірний клієнт або пароль. Виникає, якщо надано невірні авторизаційні дані.
-    - **404 Not Found**: Неправильний тип заявки. Якщо тип, наданий у запиті, не є одним з наступних: `available`, `in_progress`, `finished`.
-    - **500 Internal Server Error**: Виникла внутрішня помилка сервера.
-
-    **Приклад запиту**:
-
-    Запит на отримання кількості доступних заявок:
-    ```json
-    POST /applications/count
-    Content-Type: application/json
-
-    {
-        "client": "frontend",
-        "password": "yourpassword"
-    }
-
-    type=available
-    ```
-
-    **Приклад відповіді**:
-    ```json
-    {
-        "type": "available",
-        "count": 10
-    }
-    ```
-
-    **Примітка**: Якщо клієнт або пароль невірні, буде повернено помилку 400. Якщо тип заявки невірний, буде повернено помилку 404.
-    """
-    client_query = select(models.Client).filter(models.Client.name == payload.client)
-    client_result = await db.execute(client_query)
-    client_entry = client_result.scalars().first()
-
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type")
-
-    if not pwd_context.verify(payload.password, client_entry.password):
-        raise HTTPException(status_code=400, detail="Incorrect password for client")
+        """
+    try:
+        user = verify_token(token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     try:
-        query = select(func.count()).select_from(models.Applications)
 
-        if type == 'available':
-            query = query.filter(
-                models.Applications.is_done.is_(False),
-                models.Applications.is_in_progress.is_(False),
-                models.Applications.is_active.is_(True)
-            )
-        elif type == 'in_progress':
-            query = query.filter(
-                models.Applications.is_in_progress.is_(True),
-                models.Applications.is_done.is_(False),
-                models.Applications.is_active.is_(True)
-            )
-        elif type == 'finished':
-            query = query.filter(
-                models.Applications.is_done.is_(True),
-                models.Applications.is_active.is_(True)
-            )
-        else:
-            raise HTTPException(status_code=404, detail="Invalid application type")
+        total_applications_query = select(func.count()).select_from(models.Applications)
+        total_applications_result = await db.execute(total_applications_query)
+        total_applications = total_applications_result.scalar()
 
-        result = await db.execute(query)
-        total_count = result.scalar()
 
-        return JSONResponse(content={"type": type, "count": total_count}, status_code=200)
+        volunteers_query = select(func.count()).select_from(models.Customer).filter(models.Customer.role_id == 2)
+        volunteers_result = await db.execute(volunteers_query)
+        volunteers_count = volunteers_result.scalar()
+
+        completed_inactive_query = select(func.count()).select_from(models.Applications).filter(
+            models.Applications.is_done.is_(True),
+            models.Applications.is_active.is_(False)
+        )
+        completed_inactive_result = await db.execute(completed_inactive_query)
+        completed_inactive_count = completed_inactive_result.scalar()
+
+        return JSONResponse(
+            content={
+                "total_applications": total_applications,
+                "volunteers_count": volunteers_count,
+                "completed_inactive_applications": completed_inactive_count
+            },
+            status_code=200
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")

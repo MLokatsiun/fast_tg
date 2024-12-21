@@ -104,7 +104,6 @@ async def register_user(
     - Система дозволяє оновлювати профілі неактивних користувачів, якщо їх перевірка раніше була відхилена.
     """
     try:
-
         role_check_result = await db.execute(
             select(models.Roles).filter(models.Roles.id == user_info.role_id)
         )
@@ -115,40 +114,93 @@ async def register_user(
                 detail=f"Invalid role_id: {user_info.role_id}. Role does not exist in the Roles table."
             )
 
-        tg_id_check_result = await db.execute(
-            select(models.Customer).filter(
-                models.Customer.tg_id == user_info.tg_id,
-                models.Customer.role_id == user_info.role_id,
-                models.Customer.is_active == True
-            )
-        )
-        existing_user_with_tg_id = tg_id_check_result.scalars().first()
-        if existing_user_with_tg_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"User with TG ID {user_info.tg_id} already exists for role ID {user_info.role_id} and is active."
-            )
-
-        phone_check_result = await db.execute(
-            select(models.Customer).filter(
-                models.Customer.phone_num == user_info.phone_num,
-                models.Customer.role_id == user_info.role_id,
-                models.Customer.is_active == True
-            )
-        )
-        existing_user_with_phone = phone_check_result.scalars().first()
-        if existing_user_with_phone:
-            raise HTTPException(
-                status_code=400,
-                detail=f"User with phone number {user_info.phone_num} already exists for role ID {user_info.role_id} and is active."
-            )
-
         client_result = await db.execute(
             select(models.Client).filter(models.Client.name == user_info.client)
         )
         client_entry = client_result.scalars().first()
         if not client_entry:
             raise HTTPException(status_code=400, detail="Invalid client.")
+
+        tg_id_check_result = await db.execute(
+            select(models.Customer).filter(
+                models.Customer.tg_id == user_info.tg_id,
+                models.Customer.role_id == user_info.role_id
+            )
+        )
+        existing_user = tg_id_check_result.scalars().first()
+
+        if existing_user:
+            if existing_user.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"User with TG ID {user_info.tg_id} and role ID {user_info.role_id} already exists and is active."
+                )
+            else:
+                existing_user.phone_num = user_info.phone_num
+                existing_user.firstname = user_info.firstname
+                existing_user.lastname = user_info.lastname
+                existing_user.patronymic = user_info.patronymic
+                existing_user.role_id = user_info.role_id
+                existing_user.client_id = client_entry.id
+                existing_user.is_active = True
+                existing_user.is_verified = False
+
+                if user_info.role_id == 2:
+                    if not user_info.location:
+                        raise HTTPException(status_code=400, detail="Location data is required for volunteers.")
+
+                    if user_info.location.address:
+                        coordinates = await get_coordinates(address=user_info.location.address)
+                        latitude = coordinates["latitude"]
+                        longitude = coordinates["longitude"]
+                        address_name = user_info.location.address
+                    elif user_info.location.latitude is not None and user_info.location.longitude is not None:
+                        latitude = float(user_info.location.latitude)
+                        longitude = float(user_info.location.longitude)
+
+                        reverse_coordinates = await get_coordinates(lat=latitude, lng=longitude)
+                        address_name = reverse_coordinates.get("address", "Unknown Address")
+                    else:
+                        raise HTTPException(status_code=400,
+                                            detail="Provide either address or both latitude and longitude.")
+
+                    location_query = select(models.Locations).filter(
+                        models.Locations.latitude == latitude,
+                        models.Locations.longitude == longitude,
+                        models.Locations.address_name == address_name
+                    )
+                    location_result = await db.execute(location_query)
+                    existing_location = location_result.scalars().first()
+
+                    if existing_location:
+                        existing_user.location_id = existing_location.id
+                    else:
+                        location_entry = models.Locations(
+                            latitude=latitude,
+                            longitude=longitude,
+                            address_name=address_name
+                        )
+                        db.add(location_entry)
+                        await db.commit()
+                        await db.refresh(location_entry)
+                        existing_user.location_id = location_entry.id
+                else:
+                    if user_info.location:
+                        raise HTTPException(status_code=400, detail="Location data is not required for beneficiaries.")
+
+                await db.commit()
+                await db.refresh(existing_user)
+
+                return {
+                    "id": existing_user.id,
+                    "phone_num": existing_user.phone_num,
+                    "tg_id": existing_user.tg_id,
+                    "firstname": existing_user.firstname,
+                    "lastname": existing_user.lastname,
+                    "role_id": existing_user.role_id,
+                    "location_id": existing_user.location_id,
+                    "is_verified": existing_user.is_verified
+                }
 
         location_id = None
         if user_info.role_id == 2:

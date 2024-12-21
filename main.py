@@ -6,8 +6,16 @@ from routers.volunteers import router as volunteer_router
 from routers.for_developers import router as developers_router
 from database import get_db
 from data_initializer import initialize_data
-
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 app.include_router(volunteer_router, prefix="/volunteer", tags=["Volunteer"])

@@ -1,5 +1,6 @@
 import math
 from datetime import timedelta, datetime
+from typing import Optional
 from xmlrpc.client import DateTime
 
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -8,7 +9,8 @@ from sqlalchemy import func
 from starlette import status
 from starlette.responses import JSONResponse
 
-from business_logical import verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token
+from business_logical import verify_password, ACCESS_TOKEN_EXPIRE_MINUTES, create_access_token, \
+    REFRESH_TOKEN_EXPIRE_DAYS, create_refresh_token
 from database import get_db
 import models
 from passlib.context import CryptContext
@@ -18,12 +20,14 @@ from sqlalchemy.future import select
 import jwt
 from decouple import config
 from fastapi import Depends, APIRouter, Query
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter()
 
 ALGORITHM = "HS256"
 SECRET_KEY = config("SECRET_KEY")
 from fastapi import Body
+
 
 def haversine(lat1, lon1, lat2, lon2):
     """
@@ -44,11 +48,15 @@ def haversine(lat1, lon1, lat2, lon2):
 
     return R * c
 
+
 from pydantic import BaseModel
+
 
 class Token(BaseModel):
     access_token: str
     token_type: str
+    refresh_token: Optional[str] = None
+
 
 class TokenRequest(BaseModel):
     client: str
@@ -61,27 +69,44 @@ async def login_for_access_token(
         db: AsyncSession = Depends(get_db),
 ):
     """
-    **Отримання токену доступу для клієнта.**
+        **Отримання токенів доступу та оновлення.**
 
-    - **Ендпоінт**: POST `/token`
-    - **Опис**: Отримання JWT токену для авторизації клієнта.
+        - **Ендпоінт**: `POST /token`
+        - **Опис**: Дозволяє авторизувати клієнта за допомогою імені та пароля, а також отримати `access_token` і `refresh_token`.
 
-    **Вхідні параметри**:
-    - **client**: Назва клієнта (наприклад, `frontend` або `telegram`).
-    - **password**: Пароль клієнта.
+        **Вхідні параметри:**
+        - **client**: Назва клієнта (наприклад, `frontend` або `telegram`).
+        - **password**: Пароль клієнта.
 
-    **Відповідь**:
-    - **200**: Токен доступу:
-      ```json
-      {
-          "access_token": "your_access_token",
-          "token_type": "bearer"
-      }
-      ```
+        **Відповідь:**
+        - **200 OK**: Повертаються токени авторизації. Приклад відповіді:
+          ```json
+          {
+              "access_token": "токен доступу",
+              "refresh_token": "токен оновлення",
+              "token_type": "bearer"
+          }
+          ```
+        - **401 Unauthorized**: Якщо клієнт або пароль недійсні:
+          ```json
+          {
+              "detail": "Invalid client type or password"
+          }
+          ```
+        - **500 Internal Server Error**: Якщо виникла помилка на сервері:
+          ```json
+          {
+              "detail": "Error: <error_message>"
+          }
+          ```
 
-    **Примітки**:
-    - Перевіряється відповідність клієнта та пароля.
-    """
+        **Примітки:**
+        - `access_token` використовується для доступу до захищених ресурсів.
+        - Термін дії `access_token` - 15хв`
+        - Термін дії `refresh_token` - 7 днів`
+        - `refresh_token` потрібен для оновлення `access_token`.
+        - Обидва токени повертаються у відповіді у форматі JSON.
+        """
     client_query = select(models.Client).filter(models.Client.name == token_request.client)
     client_result = await db.execute(client_query)
     client_entry = client_result.scalars().first()
@@ -93,12 +118,94 @@ async def login_for_access_token(
         raise HTTPException(status_code=401, detail="Invalid client type or password")
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    refresh_token_expires = timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
     access_token = create_access_token(
         data={"sub": token_request.client}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    refresh_token = create_refresh_token(
+        data={"sub": token_request.client}, expires_delta=refresh_token_expires
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+    }
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+class RefreshToken(BaseModel):
+    access_token: str
+    token_type: str
+
+@router.post("/refresh", response_model=RefreshToken)
+async def refresh_access_token(request: RefreshTokenRequest):
+    """
+        **Оновлення токену доступу.**
+
+        - **Ендпоінт**: `POST /refresh`
+        - **Опис**: Оновлення `access_token` за допомогою дійсного `refresh_token`.
+
+        **Вхідні параметри:**
+        - **refresh_token**: Токен оновлення, що передається у форматі JSON:
+          ```json
+          {
+              "refresh_token": "ваш токен оновлення"
+          }
+          ```
+
+        **Відповідь:**
+        - **200 OK**: Повертається новий `access_token`. Приклад відповіді:
+          ```json
+          {
+              "access_token": "новий токен доступу",
+              "token_type": "bearer"
+          }
+          ```
+        - **401 Unauthorized**: Якщо `refresh_token` недійсний або прострочений:
+          ```json
+          {
+              "detail": "Invalid refresh token"
+          }
+          ```
+        - **500 Internal Server Error**: Якщо сталася помилка на сервері:
+          ```json
+          {
+              "detail": "Error: <error_message>"
+          }
+          ```
+
+        **Примітки:**
+        - Термін дії `access_token` - 15хв`.
+        - Термін дії `refresh_token` - 7 днів`
+        - Якщо `refresh_token` недійсний або прострочений, потрібно авторизуватися заново через `/token`.
+        """
+    try:
+        payload = jwt.decode(request.refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        client_name = payload.get("sub")
+
+        if client_name is None:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        new_access_token = create_access_token(
+            data={"sub": client_name}, expires_delta=access_token_expires
+        )
+
+        return {
+            "access_token": new_access_token,
+            "token_type": "bearer",
+        }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 
 def verify_token(token: str):
@@ -111,6 +218,7 @@ def verify_token(token: str):
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
 
 @router.get("/roles/", status_code=200)
 async def get_roles(
@@ -230,7 +338,6 @@ async def get_categories(
         client_name: str = payload.get("sub")
         if client_name is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-
 
         client_result = await db.execute(
             select(models.Client).filter(models.Client.name == client_name)
@@ -615,6 +722,7 @@ async def get_volunteer_rating(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error: {e}")
 
+
 @router.get('/applications/summary', status_code=200)
 async def get_applications_summary(
         token: str = Depends(oauth2_scheme),
@@ -672,7 +780,6 @@ async def get_applications_summary(
         total_applications_query = select(func.count()).select_from(models.Applications)
         total_applications_result = await db.execute(total_applications_query)
         total_applications = total_applications_result.scalar()
-
 
         volunteers_query = select(func.count()).select_from(models.Customer).filter(models.Customer.role_id == 2)
         volunteers_result = await db.execute(volunteers_query)

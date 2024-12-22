@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy.orm import selectinload
 
 from business_logical import (get_current_volonter, get_coordinates)
@@ -617,7 +619,7 @@ def haversine(lat1, lon1, lat2, lon2):
 @router.get('/applications/', response_model=List[ApplicationsList])
 async def get_applications(
         type: Optional[str] = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
-        radius_km: float = Query(500.0, description="Радіус пошуку заявок у кілометрах"),
+        radius_km: float = Query(50000.0, description="Радіус пошуку заявок у кілометрах"),
         db: AsyncSession = Depends(get_db),
         current_volunteer: models.Customer = Depends(get_current_volonter)
 ):
@@ -696,6 +698,7 @@ async def get_applications(
         volunteer_latitude, volunteer_longitude = volunteer_location
 
         if type == 'available':
+            current_time_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).join(
@@ -703,12 +706,14 @@ async def get_applications(
             ).filter(
                 models.Applications.is_done.is_(False),
                 models.Applications.is_in_progress.is_(False),
-                models.Applications.is_active.is_(True)
+                models.Applications.is_active.is_(True),
+                models.Applications.active_to > current_time_str
             )
             if categories:
                 query = query.filter(models.Applications.category_id.in_(categories))
 
         elif type == 'in_progress':
+            current_time_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).join(
@@ -717,10 +722,12 @@ async def get_applications(
                 models.Applications.is_in_progress.is_(True),
                 models.Applications.executor_id == current_volunteer.id,
                 models.Applications.is_done.is_(False),
-                models.Applications.is_active.is_(True)
+                models.Applications.is_active.is_(True),
+                models.Applications.active_to > current_time_str  # Порівняння рядків
             )
 
         elif type == 'finished':
+            current_time_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             query = select(models.Applications, models.Locations, models.Customer).join(
                 models.Locations, models.Applications.location_id == models.Locations.id
             ).join(
@@ -728,7 +735,8 @@ async def get_applications(
             ).filter(
                 models.Applications.is_done.is_(True),
                 models.Applications.executor_id == current_volunteer.id,
-                models.Applications.is_active.is_(True)
+                models.Applications.is_active.is_(True),
+                models.Applications.active_to > current_time_str
             )
 
         else:

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
-from schemas import CreateCustomerBase, RefreshTokenRequest
+from schemas import CreateCustomerBase, RefreshTokenRequest, UserInfoSchema
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 router = APIRouter()
@@ -477,3 +477,108 @@ async def refresh_token(
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
+@router.post("/user/", status_code=200)
+async def get_user_info(
+    user_info: UserInfoSchema,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    **Отримання інформації про користувача.**
+
+    - **Ендпоінт**: GET `/user/`
+    - **Опис**: Повертає повну інформацію про користувача за його Telegram ID, роллю, клієнтом та паролем.
+    - **Параметри**:
+      - **tg_id**: Telegram ID користувача.
+      - **role_id**: Роль користувача.
+      - **client**: Назва клієнта, з яким пов'язаний користувач.
+      - **password**: Пароль клієнта (сталий).
+
+    **Відповідь:**
+    - **200**: Успішно повертає інформацію про користувача.
+        ```json
+        {
+            "id": 1,
+            "phone_num": "380123456789",
+            "tg_id": "123456789",
+            "firstname": "Ім'я",
+            "lastname": "Прізвище",
+            "patronymic": "По батькові",
+            "role": "Бенефіціар",
+            "client": "Назва клієнта",
+            "location": {
+                "address": "Адреса",
+                "latitude": 50.4501,
+                "longitude": 30.5234
+            },
+            "is_verified": false,
+            "is_active": true
+        }
+        ```
+    - **404**: Користувача не знайдено.
+        ```json
+        {
+            "detail": "User not found."
+        }
+    - **500**: Помилка сервера чи бази даних.
+        ```json
+        {
+            "detail": "Database error: ..."
+        }
+    """
+    try:
+        query = select(models.Customer).filter(
+            models.Customer.tg_id == user_info.tg_id,
+            models.Customer.role_id == user_info.role_id
+        )
+        result = await db.execute(query)
+        user = result.scalars().first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        client_query = select(models.Client).filter(models.Client.name == user_info.client)
+        client_result = await db.execute(client_query)
+        client_entry = client_result.scalars().first()
+
+        if not client_entry:
+            raise HTTPException(status_code=400, detail="Invalid client.")
+
+        if not pwd_context.verify(user_info.password, client_entry.password):
+            raise HTTPException(status_code=400, detail="Invalid password.")
+
+        role_query = select(models.Roles).filter(models.Roles.id == user.role_id)
+        role_result = await db.execute(role_query)
+        role = role_result.scalars().first()
+
+        location_data = None
+        if user.location_id:
+            location_query = select(models.Locations).filter(models.Locations.id == user.location_id)
+            location_result = await db.execute(location_query)
+            location = location_result.scalars().first()
+
+            if location:
+                location_data = {
+                    "address": location.address_name,
+                    "latitude": location.latitude,
+                    "longitude": location.longitude
+                }
+
+        return {
+            "id": user.id,
+            "phone_num": user.phone_num,
+            "tg_id": user.tg_id,
+            "firstname": user.firstname,
+            "lastname": user.lastname,
+            "patronymic": user.patronymic,
+            "role": role.name if role else "Unknown",
+            "client": client_entry.name if client_entry else "Unknown",
+            "location": location_data,
+            "is_verified": user.is_verified,
+            "is_active": user.is_active
+        }
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")

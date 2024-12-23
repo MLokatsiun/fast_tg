@@ -116,5 +116,16 @@ class ModeratorLoginRequest(BaseModel):
     client: str
     client_password: str
 
+class UnverifiedUserResponse(BaseModel):
+    phone_num: str
+    firstname: str
+    lastname: str
+    role: str
+
+class UserInfoSchema(BaseModel):
+    tg_id: str
+    role_id: int
+    client: str
+    password: str
 
 

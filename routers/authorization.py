@@ -280,17 +280,16 @@ async def register_user(
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-
 @router.post("/login/", status_code=200)
 async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(get_db)):
     """
     **Вхід користувача в систему.**
 
     - **Ендпоінт**: POST `/login/`
-    - **Опис**: Дозволяє аутентифікувати користувача та отримати токени доступу.
+    - **Опис**: Дозволяє аутентифікувати користувача та отримати токени доступу або інформацію без токенів, якщо користувач не активний.
 
     - **Вхідні параметри**:
-      - **login_request**: Дані для входу користувача:
+        - **login_request**: Дані для входу користувача:
         ```json
         {
             "tg_id": "123456789",
@@ -304,12 +303,8 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
         - **client**: Назва клієнта, з яким пов'язаний користувач.
         - **password**: Пароль клієнта для аутентифікації.
 
-    - **Обмеження**:
-      - Користувач має бути активним (`is_active: true`).
-      - Клієнт має бути валідним і зареєстрованим у системі.
-
     **Відповідь:**
-    - **200**: Успішний вхід. Повертаються токени доступу:
+    - Якщо користувач активний, повертаються токени доступу:
         ```json
         {
             "access_token": "eyJhbGciOiJIUzI1NiIsInR...",
@@ -317,41 +312,21 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
             "token_type": "bearer"
         }
         ```
-      - **access_token**: Токен доступу для аутентифікації запитів.
-      - **refresh_token**: Токен для оновлення токена доступу.
-      - **token_type**: Тип токена (bearer).
-
-    - **400**: Помилка вхідних даних.
-      - Невалідний клієнт:
+    - Якщо користувач не активний, повертається інформація про нього без токенів:
         ```json
         {
-            "detail": "Invalid client type"
+            "id": 1,
+            "phone_num": "+1234567890",
+            "tg_id": "123456789",
+            "firstname": "John",
+            "lastname": "Doe",
+            "role": "beneficiary",
+            "client": "Client Name",
+            "location": {"address": "Some Address", "latitude": 0.0, "longitude": 0.0},
+            "is_verified": true,
+            "is_active": false
         }
         ```
-      - Невірний пароль:
-        ```json
-        {
-            "detail": "Incorrect password for client"
-        }
-        ```
-      - Користувач не знайдений:
-        ```json
-        {
-            "detail": "User not found with provided TG ID and role ID"
-        }
-        ```
-
-    - **403**: Профіль користувача не активний:
-        ```json
-        {
-            "detail": "User profile is not active. Please contact support."
-        }
-        ```
-
-    **Примітки:**
-    - **access_token** діє протягом часу, визначеного параметром `ACCESS_TOKEN_EXPIRE_MINUTES`.
-    - **refresh_token** можна використовувати для оновлення токена доступу.
-    - Якщо виникли проблеми з доступом, зверніться до технічної підтримки.
     """
 
     client_result = await db.execute(
@@ -364,12 +339,11 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
     if not pwd_context.verify(login_request.password, client_entry.password):
         raise HTTPException(status_code=400, detail="Incorrect password for client")
 
-    # Пошук активного користувача
+    # Пошук користувача
     user_result = await db.execute(
         select(models.Customer).filter(
             models.Customer.tg_id == login_request.tg_id,
-            models.Customer.role_id == login_request.role_id,
-            models.Customer.is_active == True  # Фільтруємо тільки активні профілі
+            models.Customer.role_id == login_request.role_id
         )
     )
     user = user_result.scalars().first()
@@ -378,7 +352,29 @@ async def client_login(login_request: LoginRequest, db: AsyncSession = Depends(g
         raise HTTPException(status_code=400, detail="User not found with provided TG ID and role ID")
 
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="User profile is not active. Please contact support.")
+        location = await db.execute(
+            select(models.Locations).filter(models.Locations.id == user.location_id)
+        )
+        location = location.scalars().first()
+        location_data = {
+            "address": location.address_name,
+            "latitude": location.latitude,
+            "longitude": location.longitude
+        } if location else None
+
+        return {
+            "id": user.id,
+            "phone_num": user.phone_num,
+            "tg_id": user.tg_id,
+            "firstname": user.firstname,
+            "lastname": user.lastname,
+            "patronymic": user.patronymic,
+            "role_id": user.role_id,
+            "client_id": user.client_id,
+            "location": location_data,
+            "is_verified": user.is_verified,
+            "is_active": user.is_active
+        }
 
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="User is not verified. Please contact support.")
@@ -476,109 +472,3 @@ async def refresh_token(
         }
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
-
-@router.post("/user/", status_code=200)
-async def get_user_info(
-    user_info: UserInfoSchema,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    **Отримання інформації про користувача.**
-
-    - **Ендпоінт**: GET `/user/`
-    - **Опис**: Повертає повну інформацію про користувача за його Telegram ID, роллю, клієнтом та паролем.
-    - **Параметри**:
-      - **tg_id**: Telegram ID користувача.
-      - **role_id**: Роль користувача.
-      - **client**: Назва клієнта, з яким пов'язаний користувач.
-      - **password**: Пароль клієнта (сталий).
-
-    **Відповідь:**
-    - **200**: Успішно повертає інформацію про користувача.
-        ```json
-        {
-            "id": 1,
-            "phone_num": "380123456789",
-            "tg_id": "123456789",
-            "firstname": "Ім'я",
-            "lastname": "Прізвище",
-            "patronymic": "По батькові",
-            "role": "Бенефіціар",
-            "client": "Назва клієнта",
-            "location": {
-                "address": "Адреса",
-                "latitude": 50.4501,
-                "longitude": 30.5234
-            },
-            "is_verified": false,
-            "is_active": true
-        }
-        ```
-    - **404**: Користувача не знайдено.
-        ```json
-        {
-            "detail": "User not found."
-        }
-    - **500**: Помилка сервера чи бази даних.
-        ```json
-        {
-            "detail": "Database error: ..."
-        }
-    """
-    try:
-        query = select(models.Customer).filter(
-            models.Customer.tg_id == user_info.tg_id,
-            models.Customer.role_id == user_info.role_id
-        )
-        result = await db.execute(query)
-        user = result.scalars().first()
-
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found.")
-
-        client_query = select(models.Client).filter(models.Client.name == user_info.client)
-        client_result = await db.execute(client_query)
-        client_entry = client_result.scalars().first()
-
-        if not client_entry:
-            raise HTTPException(status_code=400, detail="Invalid client.")
-
-        if not pwd_context.verify(user_info.password, client_entry.password):
-            raise HTTPException(status_code=400, detail="Invalid password.")
-
-        role_query = select(models.Roles).filter(models.Roles.id == user.role_id)
-        role_result = await db.execute(role_query)
-        role = role_result.scalars().first()
-
-        location_data = None
-        if user.location_id:
-            location_query = select(models.Locations).filter(models.Locations.id == user.location_id)
-            location_result = await db.execute(location_query)
-            location = location_result.scalars().first()
-
-            if location:
-                location_data = {
-                    "address": location.address_name,
-                    "latitude": location.latitude,
-                    "longitude": location.longitude
-                }
-
-        return {
-            "id": user.id,
-            "phone_num": user.phone_num,
-            "tg_id": user.tg_id,
-            "firstname": user.firstname,
-            "lastname": user.lastname,
-            "patronymic": user.patronymic,
-            "role": role.name if role else "Unknown",
-            "client": client_entry.name if client_entry else "Unknown",
-            "location": location_data,
-            "is_verified": user.is_verified,
-            "is_active": user.is_active
-        }
-
-    except SQLAlchemyError as e:
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")

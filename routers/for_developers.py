@@ -1,6 +1,6 @@
 import math
 from datetime import timedelta, datetime
-from typing import Optional
+from typing import Optional, cast
 from xmlrpc.client import DateTime
 
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -462,6 +462,7 @@ async def get_applications_for_developers(
         type: str = Query(..., description="Тип заявок: 'available', 'in_progress', 'finished'"),
         category_ids: list[int] = Body(None, description="Список ID категорій для фільтрації"),
         days_valid: int = Body(None, description="Фільтр за кількістю днів дійсності заявки"),
+        urgent: bool = Body(False, description="Фільтр термінових заявок (дійсні до сьогодні)"),
         db: AsyncSession = Depends(get_db)
 ):
     """
@@ -480,6 +481,7 @@ async def get_applications_for_developers(
       - `'finished'`: завершені заявки.
     - **category_ids**: Список ID категорій для фільтрації заявок.
     - **days_valid**: Фільтр за кількістю днів дійсності заявки. Якщо параметр задано, заявки будуть фільтруватися за `active_to`, щоб показувати лише ті, що будуть дійсні до вказаної кількості днів.
+    - **urgent**: Фільтр термінових заявок
 
     **Відповідь:**
     - **200 OK**: Повертається список заявок, що відповідають вказаним критеріям фільтрації:
@@ -544,16 +546,6 @@ async def get_applications_for_developers(
     - Можливість фільтрації за кількістю днів дійсності заявки через параметр `days_valid`.
 
     """
-
-    client_name = verify_token(token)
-
-    client_query = select(models.Client).filter(models.Client.name == client_name)
-    client_result = await db.execute(client_query)
-    client_entry = client_result.scalars().first()
-
-    if not client_entry:
-        raise HTTPException(status_code=400, detail="Invalid client type")
-
     try:
         query = select(models.Applications, models.Locations, models.Customer).join(
             models.Locations, models.Applications.location_id == models.Locations.id
@@ -581,24 +573,30 @@ async def get_applications_for_developers(
         else:
             raise HTTPException(status_code=404, detail="Invalid application type")
 
-        if category_ids:
-            if 0 not in category_ids:
-                query = query.filter(models.Applications.category_id.in_(category_ids))
-
-        if days_valid is not None and days_valid > 0:
-            from sqlalchemy import cast, DateTime
-            current_date = datetime.utcnow()
-            valid_until = current_date + timedelta(days=days_valid)
-            query = query.filter(cast(models.Applications.active_to, DateTime) <= valid_until)
-
-        current_date_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        query = query.filter(models.Applications.date_at > current_date_str)
+        if category_ids and 0 not in category_ids:
+            query = query.filter(models.Applications.category_id.in_(category_ids))
 
         result = await db.execute(query)
         applications = result.fetchall()
 
+        current_date = datetime.utcnow()
+        ten_hours_later = current_date + timedelta(hours=10)
         response_data = []
+
         for application in applications:
+            try:
+                active_to = datetime.strptime(application.Applications.active_to, '%Y-%m-%dT%H:%M:%S')
+            except ValueError:
+                continue
+
+            if active_to < current_date or active_to > ten_hours_later:
+                continue
+
+            if days_valid:
+                valid_until = current_date + timedelta(days=days_valid)
+                if active_to > valid_until:
+                    continue
+
             executor_data = None
             if application.Applications.executor_id:
                 executor_query = select(models.Customer).filter(

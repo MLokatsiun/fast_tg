@@ -140,9 +140,11 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
+
 class RefreshToken(BaseModel):
     access_token: str
     token_type: str
+
 
 @router.post("/refresh", response_model=RefreshToken)
 async def refresh_access_token(request: RefreshTokenRequest):
@@ -580,8 +582,9 @@ async def get_applications_for_developers(
         applications = result.fetchall()
 
         current_date = datetime.utcnow()
-        ten_hours_later = current_date + timedelta(hours=10)
         response_data = []
+
+        urgent_end_time = current_date + timedelta(hours=10)
 
         for application in applications:
             try:
@@ -589,7 +592,11 @@ async def get_applications_for_developers(
             except ValueError:
                 continue
 
-            if active_to < current_date or active_to > ten_hours_later:
+            if urgent:
+                if active_to > urgent_end_time:
+                    continue
+
+            if active_to < current_date:
                 continue
 
             if days_valid:

@@ -4,7 +4,8 @@ from sqlalchemy.future import select
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
-import models
+import jwt
+from jwt import PyJWTError
 import httpx
 from passlib.context import CryptContext
 from database import get_db
@@ -17,7 +18,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7
-
 
 def create_access_token(data: dict, expires_delta: timedelta):
     to_encode = data.copy()
@@ -97,11 +97,14 @@ async def get_coordinates(address: str = None, lat: float = None, lng: float = N
     if address:
         params = {
             "address": address,
+            "language": "uk",
+            "components": "country:UA",
             "key": GOOGLE_API_KEY
         }
     elif lat is not None and lng is not None:
         params = {
             "latlng": f"{lat},{lng}",
+            "language": "uk",
             "key": GOOGLE_API_KEY
         }
     else:
@@ -133,6 +136,7 @@ async def get_coordinates(address: str = None, lat: float = None, lng: float = N
         return {
             "address": address
         }
+
 
 
 def get_password_hash(password):

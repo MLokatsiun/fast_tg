@@ -64,7 +64,6 @@ volunteer-api/
 ### 1. Authentication `/auth`
 - Registration
 - Login
-- Password recovery
 
 ### 2. Volunteers `/volunteer`
 - Add volunteers

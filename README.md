@@ -15,8 +15,8 @@ This project is a RESTful API for a volunteer platform built with **FastAPI**. I
 ## Installation and Setup
 ### 1. Clone the Repository
 ```sh
-git clone https://github.com/your-repo/volunteer-api.git
-cd volunteer-api
+git clone https://github.com/MLokatsiun/fast_tg.git
+cd fast_tg
 ```
 
 ### 2. Install Dependencies
